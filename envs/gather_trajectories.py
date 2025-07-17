@@ -448,7 +448,7 @@ def find_local_goal(vehicle_pos, vehicle_heading, chrono_path, local_goal_idx):
     for idx in range(local_goal_idx, len(chrono_path)):
         path_point = chrono_path[idx]
         distance = ((vehicle_pos[0] - path_point[0])**2 + (vehicle_pos[1] - path_point[1])**2)**0.5
-        
+        # 寻找第一个距离大于等于look_ahead_distance的点
         if distance >= look_ahead_distance:
             dx = path_point[0] - vehicle_pos[0]
             dy = path_point[1] - vehicle_pos[1]
@@ -716,6 +716,7 @@ def get_current_label(vehicle, vehicle_pos, region_size, high_res_terrain_labels
     cropped_labels = cropped_labels.T
     return cropped_labels
 
+# 生成按面积降序排列的所有可能矩形形状，优先尝试大面积合并
 def find_regular_shape(patch_size, max_dim):
     """
     Generates a list of possible rectangular shapes (width, height) that can be formed.
@@ -859,6 +860,7 @@ def collect_traj(vehicle, driver_inputs, time, wait_time_before_log, last_log_ti
         # Get gear
         gear = vehicle.GetVehicle().GetTransmission().GetCurrentGear()
         
+        # 状态向量维度：12维（3D位置 + 3D速度 + 3D姿态 + 3D角速度）
         # State: (x, y, z, x_dot, y_dot, z_dot, roll, pitch, yaw, roll_dot, pitch_dot, yaw_dot)
         state = {
             'x': pos.x,
@@ -875,6 +877,7 @@ def collect_traj(vehicle, driver_inputs, time, wait_time_before_log, last_log_ti
             'yaw_dot': yaw_rate
         }
         
+        # 环境感知数据收集
         region_size = 128
         under_vehicle_elev, _ = get_cropped_elev(vehicle, (pos.x, pos.y, pos.z), region_size, 5)
         under_vehicle_sem = get_cropped_sem(vehicle, (pos.x, pos.y, pos.z), region_size)
@@ -883,19 +886,20 @@ def collect_traj(vehicle, driver_inputs, time, wait_time_before_log, last_log_ti
     
         # Action: (steer, speed, throttle, brake, gear)
         action = {
-            'target_steer': target_steering,
-            'real_steer': real_steering,
-            'target_speed': target_speed,
-            'real_speed': real_speed,
-            'throttle': driver_inputs.m_throttle,
-            'brake': driver_inputs.m_braking,
-            'gear': gear
+            'target_steer': target_steering,    # 目标转向输入 [-1, 1]
+            'real_steer': real_steering,        # 实际转向角 [-1, 1]
+            'target_speed': target_speed,       # 目标速度 (m/s)
+            'real_speed': real_speed,           # 实际速度 (m/s)
+            'throttle': driver_inputs.m_throttle,  # 油门踏板 [0, 1]
+            'brake': driver_inputs.m_braking,      # 刹车踏板 [0, 1]
+            'gear': gear                           # 当前档位
         }
         
         return state, action, True, time
     
     return None, None, False, last_log_time
 
+# 一条轨迹对应一个文件
 def save_traj(trajectory_data, world_id, pos_id, timestr):
     """
     Save trajectory data as pickle file
@@ -1423,8 +1427,8 @@ def load_texture_config():
                 'is_deformable': False,
                 'terrain_type': terrain_type,
                 'texture_file': texture_info['texture_file'],
-                'friction': texture_info['friction'],
-                'restitution': texture_info.get('restitution', 0.01)
+                'friction': texture_info['friction'],                   # 摩擦系数(仅刚性地形)
+                'restitution': texture_info.get('restitution', 0.01)    # 恢复系数(仅刚性地形)
             }
         
     return property_dict, terrain_labels, texture_options, terrain_patches    
@@ -1556,7 +1560,7 @@ def run_simulation(render=False, use_gui=False, m_isFlat = False, is_rigid=False
         deform_terrains = combine_deformation(m_system, terrain_patches, property_dict, texture_options, m_isFlat)
         terrain_labels = original_labels
              
-    else: 
+    else: # 混合地形
         original_labels = terrain_labels.copy()
         deform_terrains, property_dict, _ = mixed_terrain(
             m_system, terrain_patches, terrain_labels.copy(), property_dict,

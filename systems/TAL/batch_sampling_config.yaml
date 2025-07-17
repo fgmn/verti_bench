@@ -1,0 +1,51 @@
+# TAL系统批量采样配置文件示例
+# 使用方法: python batch_tal_sampling.py 然后根据需要修改参数
+
+# 基本采样设置
+num_worlds: 100              # 要测试的世界数量 (1-100)
+samples_per_world: 5        # 每个世界每种车型的采样次数
+num_workers: 4              # 并行进程数 (建议为CPU核心数)
+
+# 车型设置
+vehicle_types:
+  - "HMMWV"                 # 高机动性多用途轮式车辆
+  # - "Gator"                 # 约翰迪尔Gator多用途车
+  # - "FEDA"                  # FEDA车型
+  # 可选的其他车型:
+  # - "MAN5t"               # MAN 5吨卡车
+  # - "MAN7t"               # MAN 7吨卡车
+  # - "MAN10t"              # MAN 10吨卡车
+  # - "M113"                # M113装甲运兵车
+  # - "ART"                 # ART车型
+  # - "VW"                  # 大众车型
+
+# 仿真参数
+simulation:
+  max_simulation_time: 60.0  # 单个仿真最大时间 (秒)
+  target_speed: 4.0           # 目标行驶速度 (m/s)
+  scale_factor: 1.0           # 地形缩放因子
+
+# 数据收集参数
+data_collection:
+  log_frequency: 10.0         # 轨迹记录频率 (Hz)
+  buffer_size: 1111             # 数据缓冲区大小
+  collect_local_terrain: true # 是否收集局部地形patch
+  terrain_region_size: 64     # 地形patch大小 (像素)
+
+# 输出设置
+output:
+  base_directory: "tal_batch_results"  # 基础输出目录
+  include_timestamp: true              # 是否在目录名中包含时间戳
+  redirect_subprocess_output: true     # 是否重定向子进程输出到日志文件
+  
+# 日志设置
+logging:
+  main_process_console: true           # 主进程是否输出到控制台
+  subprocess_log_level: "WARNING"     # 子进程日志级别 (DEBUG, INFO, WARNING, ERROR)
+  detailed_progress: true              # 是否显示详细的进度条
+
+# 性能评估阈值
+thresholds:
+  rollover_angle: 60.0        # 翻车角度阈值 (度)
+  stuck_time_ratio: 0.8       # 卡住时间比例阈值
+  min_distance: 5.0           # 最小有效行驶距离 (米)

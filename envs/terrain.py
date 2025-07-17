@@ -99,6 +99,7 @@ class TerrainManager:
         # Load terrain data
         self.terrain_path, self.terrain_array, self.bmp_dim_x, self.bmp_dim_y = self._load_terrain_data()
         self.high_res_data, self.high_res_dim_x, self.high_res_dim_y = self._load_high_res_data()
+        self.high_sem_data = self._load_high_res_semantic_data()  # Add semantic data loading
         self.property_dict, self.terrain_labels, self.texture_options, self.terrain_patches = self._load_texture_config()
         self.high_res_terrain_labels = self._load_high_res_terrain_labels()
         self.obs_path = self._load_obstacle_map()
@@ -152,6 +153,29 @@ class TerrainManager:
             raise ValueError("Check high resolution height map dimensions")
         
         return high_res_data, high_res_dim_x, high_res_dim_y
+    
+    # no test
+    def _load_high_res_semantic_data(self):
+        """Load high resolution semantic data"""
+        try:
+            high_sem_file = f"sem{self.world_id}_*.png"
+            high_sem_path = os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                                    "./data/BenchMaps/sampled_maps/Configs/Final", high_sem_file)
+            matched_files = glob.glob(high_sem_path)
+            
+            if matched_files:
+                actual_sem_path = matched_files[0]
+                actual_sem_img = Image.open(actual_sem_path)
+                high_sem_data = np.array(actual_sem_img.convert('RGB'))
+                print(f"Loaded semantic data: {high_sem_data.shape}")
+                return high_sem_data
+            else:
+                print(f"Warning: No semantic data found for world {self.world_id}")
+                return None
+                
+        except Exception as e:
+            print(f"Warning: Failed to load semantic data: {e}")
+            return None
     
     def _load_high_res_terrain_labels(self):
         """Load high resolution terrain labels"""
@@ -226,7 +250,20 @@ class TerrainManager:
         return property_dict, terrain_labels, texture_options, terrain_patches    
         
     def terrain_patch_bmp(self, terrain_array, start_y, end_y, start_x, end_x, idx):
-        """Create bitmap file for a terrain patch"""
+        """Create bitmap file for a terrain patch with caching based on world_id
+        
+        Args:
+            terrain_array: The terrain height data array
+            start_y, end_y, start_x, end_x: Patch boundaries
+            idx: Additional identifier for the patch
+            
+        Returns:
+            str: Path to the cached or newly created BMP file
+            
+        Note:
+            Files are cached based on world_id and patch coordinates to avoid
+            regenerating the same patches across multiple processes or runs.
+        """
         # Boundary check
         if (start_y < 0 or end_y > terrain_array.shape[0] or
             start_x < 0 or end_x > terrain_array.shape[1]):
@@ -241,24 +278,26 @@ class TerrainManager:
         # Convert to PIL Image
         patch_image = Image.fromarray(patch_array, mode='L')
         
-        # Create file path
-        patch_file = f"terrain_patch_{idx}.bmp"
+        # Create file path based on world_id and patch coordinates for caching
+        patch_file = f"terrain_patch_{self.world_id}_{start_y}_{end_y}_{start_x}_{end_x}_{idx}.bmp"
         terrain_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)),
                                 "./data/BenchMaps/sampled_maps/Configs/tmp")
         
-        # Clean up previous tmp directory
-        if os.path.exists(terrain_dir):
-            shutil.rmtree(terrain_dir)
-        
+        # Create tmp directory if it doesn't exist
         os.makedirs(terrain_dir, exist_ok=True)
         terrain_path = os.path.join(terrain_dir, patch_file)
+        
+        # Check if patch file already exists, if so, return existing path
+        if os.path.exists(terrain_path):
+            # logging.info(f"Using cached terrain patch: {terrain_path}")
+            return terrain_path
         
         # Save the image for deformable terrain
         try:
             patch_image.save(terrain_path, format="BMP")
-            logging.info(f"Saved terrain patch to {terrain_path}")
+            # logging.info(f"Saved new terrain patch to {terrain_path}")
         except Exception as e:
-            logging.error(f"Failed to save terrain patch: {e}")
+            # logging.error(f"Failed to save terrain patch {patch_file}: {e}")
             raise
         
         return terrain_path
@@ -1103,6 +1142,7 @@ class TerrainManager:
         Identify the terrain region in front of the vehicle that has the most 
         similar characteristics to the terrain currently underneath the vehicle.
         """
+        # 这里的相似指的是高度相近,不会有太大的落差
         under_mean = np.mean(under_vehicle)
         under_var = np.var(under_vehicle)
 

@@ -41,13 +41,31 @@ class TensorboardCallback(BaseCallback):
         This method is called before the first rollout starts.
         """
         hparam_dict = {
-            "algorithm": self.model.__class__.__name__,
-            "learning rate": self.model.learning_rate,
-            "gamma": self.model.gamma,
+            "algorithm": self.model.__class__.__name__,  # 算法名称
+            "learning_rate": self.model.learning_rate,   # 学习率
+            "gamma": self.model.gamma,                   # 折扣因子
+            "n_steps": self.model.n_steps,               # 每次更新的步数
+            "batch_size": self.model.batch_size,         # 批处理大小
+            "gae_lambda": self.model.gae_lambda,         # GAE lambda参数
+            "clip_range": self.model.clip_range,         # PPO裁剪范围
+            "ent_coef": self.model.ent_coef,             # 熵系数
+            "vf_coef": self.model.vf_coef,               # 价值函数系数
+            "max_grad_norm": self.model.max_grad_norm,   # 最大梯度裁剪
+            "n_epochs": self.model.n_epochs,             # 每次更新的训练轮数
         }
         metric_dict = {
-            "rollout/ep_rew_mean": 0,
-            "train/value_loss": 0.0,
+            "rollout/ep_rew_mean": 0,        # 平均回合奖励
+            "rollout/ep_len_mean": 0,        # 平均回合长度
+            "train/value_loss": 0.0,         # 价值函数损失
+            "train/policy_loss": 0.0,        # 策略损失
+            "train/entropy_loss": 0.0,       # 熵损失
+            "train/approx_kl": 0.0,          # 近似KL散度
+            "train/clip_fraction": 0.0,      # 裁剪比例
+            "train/explained_variance": 0.0, # 解释方差
+            "rollout/total_success": 0,      # 成功总次数
+            "rollout/total_fallen": 0,       # 跌倒总次数
+            "rollout/total_timeout": 0,      # 超时总次数
+            "rollout/total_crashes": 0,      # 碰撞总次数
         }
         self.logger.record(
             "hparams",
@@ -129,7 +147,7 @@ if __name__ == '__main__':
         shutil.rmtree(terrain_dir)
     
     # Maximum num is 32
-    num_procs = 10                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+    num_procs = 5                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
     base_log_path = "./res/logs"
     os.makedirs(base_log_path , exist_ok=True)
 
@@ -156,15 +174,23 @@ if __name__ == '__main__':
     print(model.policy)
     model.set_logger(new_logger)   
 
-    # If training is interrupted, set the checkpoint file
-    # model = PPO.load(os.path.join(checkpoint_dir, f"ppo_checkpoint1"), env)
+    # If training is interrupted, set the checkpoint file and starting index
+    start_idx = 10
+    checkpoint_path = os.path.join(checkpoint_dir, f"ppo_checkpoint{start_idx}")
+    if os.path.exists(checkpoint_path + ".zip"):
+        model = PPO.load(checkpoint_path, env)
+        print(f"Resuming training from checkpoint: {checkpoint_path}")
+    else:
+        start_idx = 0  # If no checkpoint, start from scratch
 
     num_iterations = 40
-    for i in range(num_iterations):  
+    for i in range(start_idx, num_iterations):  
         model.learn(timesteps_per_iteration, progress_bar=True, callback=TensorboardCallback())
+        # 保存完整模型（包含所有信息）
         model.save(os.path.join(checkpoint_dir, f"ppo_checkpoint{i}"))
+        # 保存策略网络权重（仅权重参数）
         th.save(model.policy.state_dict(), os.path.join(checkpoint_dir, f"ppo_checkpoint{i}.pt"))
-        model = PPO.load(os.path.join(checkpoint_dir, f"ppo_checkpoint{i}"), env)  
+        print(f"Saved checkpoint {i}")
 
     print("Training completed!")
     

@@ -62,11 +62,13 @@ class ACLSim:
         
         # Load the pre-trained RL model
         model_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "ppo_ACL_iter102_level18.zip")
+        #/home/zkr/Documents/verti_bench/systems/ACL/ppo_ACL_iter102_level18.zip
         try:
             self.model = PPO.load(model_path, self.env)
             print(f"Loaded ACL model from {model_path}")
         except Exception as e:
-            print(f"Error loading RL model: {e}")
+            print(f"Failed to load ACL model from {model_path}. Error: {e}")
+            # print(f"Error loading RL model: {e}")
             raise
         
         # Reset the environment

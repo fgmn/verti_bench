@@ -379,6 +379,7 @@ class TALPlanner:
 
             # Model query for next pose caalculation
             with torch.no_grad():
+                # 切换“使用 TAL 网络”还是“用 Ackermann 模型”
                 if not wm_vct:
                     out = self.model.predict(state, cmd_vel, map_offset, elev_map)
                 else:

@@ -219,6 +219,7 @@ class MPPIPlanner:
         if self.robot_pose is not None:
 
             # Crop [29, 29] region around the vehicle
+            # 取以车辆为中心、边长 crop_size*2+1 的局部高程图
             crop_size = 29
             cropped_map, _ = self.terrain_manager.get_cropped_map(vehicle, (vehicle_pos.x, vehicle_pos.y, vehicle_pos.z), crop_size, 5)
 
@@ -239,13 +240,16 @@ class MPPIPlanner:
                 map_t = F.gaussian_blur(map_t, kernel_size=3, sigma=0.2)
                 map_t = F.resize(map_t, (160, 130))
                 traversability_maps = self.traversability_model(map_t).squeeze()
+                # 重复 K 次，供后续 K 条采样轨迹使用
                 self.map_embedding = self.model.process_map(map_d).repeat(self.K, 1, 1, 1).cuda()
                 
                 # Combine traversability maps
+                # 选取感兴趣的层索引 self.m_idx，和对应权重 self.weights
                 traversability_maps = traversability_maps[self.m_idx]
                 traversability_maps = traversability_maps * self.weights
+                # 按像素累加，得到单通道融合后的可通行性图
                 combined_traversability_map = torch.sum(traversability_maps, dim=0).squeeze()
-
+                # 对高度极值区域再加大惩罚
                 elevmap_n = F.center_crop(map_d, (320, 260)).squeeze()
                 combined_traversability_map[abs(elevmap_n - 0.8) > 0.425] = combined_traversability_map.max()*10
                 map_image = cv2.rotate(combined_traversability_map.cpu().numpy(), cv2.ROTATE_90_COUNTERCLOCKWISE)
@@ -294,15 +298,21 @@ class MPPIPlanner:
         xy_to_goal = self.dist_to_goal[:,:2]
         self.euclidian_distance = torch.norm(xy_to_goal, p=2, dim=1)
         euclidian_distance_squared = self.euclidian_distance.pow(2)
-
+        # 控制开销
         self.ctrl_cost.copy_(ctrl).mul_(self._lambda).mul_(self.inv_sigma).mul_(noise).mul_(0.5)
+        # self.ctrl_cost.copy_(ctrl)            # (K,2)
+        # .mul_(self._lambda)               # λ：MPPI 温度超参
+        # .mul_(self.inv_sigma)             # σ⁻¹：噪声标准差的倒数
+        # .mul_(noise)                      # 与噪声相乘
+        # .mul_(0.5)                        # 再乘 0.5
         running_cost_temp = self.ctrl_cost.abs_().sum(dim=1)
         self.running_cost.copy_(running_cost_temp)
-        
+        # 归一化
         eu_min = euclidian_distance_squared.min()
         eu_max = euclidian_distance_squared.max()
         euclidian_distance_squared = (euclidian_distance_squared - eu_min) / (eu_max + 1e-6 - eu_min)
 
+        # 障碍物检测与惩罚
         map_o_height, map_o_width = self.obstacle_map.size()
 
         # Use vehicle's actual position for traversability assessment
@@ -315,7 +325,9 @@ class MPPIPlanner:
         p_y[p_y>=map_o_height] = map_o_height -1
 
         obstacle_penalty = (self.obstacle_map[p_y, p_x]==255).float().to(self.running_cost.device)
-
+        # 在原有控制成本基础上累加：
+        # + 距离代价 * 10
+        # + 障碍惩罚 * 50
         self.running_cost.add_(euclidian_distance_squared*10).add_(obstacle_penalty*50)
 
     def get_control(self):
@@ -333,6 +345,9 @@ class MPPIPlanner:
         #   0    1      2     3     4     5       6          7          8           9         10        11       12    13    14   15     16     
         # xdot, ydot, zdot, rdot, pdot, ywdot, sin(roll), cos(roll), sin(pitch), cos(pitch), sin(yaw), cos(yaw), vel, delta, dt, map_1, map_2
         
+        # 当前真实机器人6-DoF状态；
+        # 预处理后的速度、角度、姿态三角函数、地形偏移等神经网络输入
+
         t0 = time.time()
         dt = self.dt
 
@@ -367,6 +382,7 @@ class MPPIPlanner:
 
             # Model query for next pose caalculation
             with torch.no_grad():
+                # 用 Ackermann 物理模型快速更新 x,y,yaw
                 out_xy = self.util.ackermann_model(cmd_vel)
             state[:,[0,1,5]] = out_xy[:,[0,1,5]]
 
@@ -375,6 +391,7 @@ class MPPIPlanner:
             # Scale the output to add it in pose
             se2_pose = pose[:, [0,1,5]].clone()
             model_out_scaled = self.util.scale_out(model_output.clone(), self.scale_state, 0)
+            # 将网络在速度-角度空间的输出映射到新的实际位姿 (x,y,yaw)，并更新 z,roll,pitch
             pose_temp, state = self.util.get_next_batch_se2(model_output, se2_pose, self.scale_state)
             
             pose[:, [0,1]] = pose_temp[:,[0,1]] 
@@ -404,7 +421,7 @@ class MPPIPlanner:
         self.ctrl[:,0].clamp_(self.min_vel, self.max_vel)
         self.ctrl[:,1].clamp_(self.min_del, self.max_del)
 
-        return self.poses
+        return self.poses   # K, T, 6
 
     def odom_cb(self, vehicle_manager, m_system):
         """

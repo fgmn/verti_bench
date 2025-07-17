@@ -45,6 +45,9 @@ class PIDSim:
         self.vehicle_type_lower = self.vehicle_type.lower()
         
         # Initialize system
+        # NSC 系统：非光滑接触物理系统
+        # 重力设置：标准地球重力 -9.81 m/s²
+        # 碰撞检测：使用 Bullet 物理引擎
         self.system = chrono.ChSystemNSC()
         self.system.SetGravitationalAcceleration(chrono.ChVector3d(0, 0, -9.81))
         self.system.SetCollisionSystemType(chrono.ChCollisionSystem.Type_BULLET)
@@ -171,10 +174,10 @@ class PIDSim:
     def _setup_driver(self):
         """Set up driver (interactive or autonomous)"""
         if self.use_gui:  
-            self.driver = veh.ChInteractiveDriverIRR(self.vis)
-            self.driver.SetSteeringDelta(0.1)
-            self.driver.SetThrottleDelta(0.02)
-            self.driver.SetBrakingDelta(0.06)
+            self.driver = veh.ChInteractiveDriverIRR(self.vis)  # 交互式驾驶
+            self.driver.SetSteeringDelta(0.1)    # 转向增量
+            self.driver.SetThrottleDelta(0.02)   # 油门增量
+            self.driver.SetBrakingDelta(0.06)    # 刹车增量
             self.driver.Initialize()
         else:
             self.driver = veh.ChDriver(self.vehicle_manager.vehicle.GetVehicle())
@@ -200,9 +203,11 @@ class PIDSim:
         # Set up moving patches if needed
         if self.terrain_manager.terrain_type == 'deformable' or self.terrain_manager.terrain_type == 'mixed':
             if self.vehicle_type.lower() in ['m113']:
+                # 履带车：大面积接触补丁
                 deform_terrains = [t for t in self.terrains if isinstance(t, veh.SCMTerrain)]
                 self.vehicle_manager.setup_moving_patches(deform_terrains, True)
             else:
+                # 轮式车：每个轮胎独立补丁
                 deform_terrains = [t for t in self.terrains if isinstance(t, veh.SCMTerrain)]
                 self.vehicle_manager.setup_moving_patches(deform_terrains, False)
         
@@ -303,6 +308,7 @@ class PIDSim:
                 )
                 
                 # Compute throttle and braking
+                # 计算油门和刹车
                 throttle, braking = self.planner.compute_throttle(
                     self.speed, 
                     time, 
@@ -316,7 +322,7 @@ class PIDSim:
             # Check if vehicle is stuck or reached goal
             current_position = (vehicle_pos.x, vehicle_pos.y, vehicle_pos.z)
             
-            if self.last_position:
+            if self.last_position and not self.use_gui:
                 position_change = np.sqrt(
                     (current_position[0] - self.last_position[0])**2 +
                     (current_position[1] - self.last_position[1])**2 +
@@ -382,6 +388,7 @@ class PIDSim:
                 return time - start_time, False, avg_roll, avg_pitch
             
             # Synchronize terrains and vehicle
+            # 同步地形和车辆
             for terrain in self.terrains:
                 terrain.Synchronize(time)
 
@@ -401,6 +408,7 @@ class PIDSim:
                 self.vis.Advance(self.step_size)
             
             # Step the system
+            # 执行物理仿真步
             self.system.DoStepDynamics(self.step_size)
         
         return None, False, 0, 0  # Return default values if loop exits unexpectedly

@@ -128,6 +128,7 @@ def smooth_path_bezier(path, num_samples=100):
     return curve
 
 class off_road_art(ChronoBaseEnv):
+    # 继承自 ChronoBaseEnv（Gym 接口），负责搭建仿真世界、维护观测/动作/奖励逻辑，并驱动 Chrono 多物理引擎。
 
     # Supported render modes
     metadata = {'additional_render.modes': ['agent_pov', 'None']}
@@ -766,6 +767,7 @@ class off_road_art(ChronoBaseEnv):
             raise NotImplementedError
 
     def get_observation(self):
+        # 由 16 维的地形特征（SWAE 编码）、1 维的航向误差和 1 维的归一化速度共 18 维组成。
         """
         Get the observation of the environment
             1. Cropped array for elevation map
@@ -852,7 +854,9 @@ class off_road_art(ChronoBaseEnv):
         # The progress made with the last action
         progress = self.m_old_distance - distance
         reward = progress_scale * progress
-
+        # 负奖励：
+        # 停滞（几乎没前进）时的固定扣分。
+        # 翻滚过大或俯仰过大时的角度惩罚。
         # If we have not moved even by 1 cm in 0.1 seconds give a penalty
         if np.abs(progress) < 0.01:
             reward -= 10
