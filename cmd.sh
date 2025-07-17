@@ -21,10 +21,10 @@ python setup.py \
   --use_gui false
 
 # python setup.py \
-#   --vehicle m113 \
+#   --vehicle hmmwv \
 #   --system pid \
 #   --speed 4.0 \
-#   --world_id 100 \
+#   --world_id 24 \
 #   --scale_factor 1 \
 #   --max_time 600 \
 #   --num_experiments 1 \

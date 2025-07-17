@@ -1,0 +1,174 @@
+dataset_info:
+  creation_time: '2025-07-17T21:31:43.097134'
+  format: offline_rl_transitions
+  total_files: 16
+  total_transitions: 154987
+  transitions_per_file: 10000
+files:
+- creation_time: '20250717_211750'
+  file_index: 0
+  filename: offline_rl_dataset_000_20250717_211750.h5
+  num_episodes: 31
+  reward_stats:
+    max: 24.166458129882812
+    mean: -65.54501342773438
+    min: -2493.968994140625
+    std: 336.1193542480469
+  transitions: 10000
+- creation_time: '20250717_211846'
+  file_index: 1
+  filename: offline_rl_dataset_001_20250717_211846.h5
+  num_episodes: 34
+  reward_stats:
+    max: 24.68726348876953
+    mean: 13.600747108459473
+    min: -136.1239776611328
+    std: 16.961381912231445
+  transitions: 10000
+- creation_time: '20250717_211941'
+  file_index: 2
+  filename: offline_rl_dataset_002_20250717_211941.h5
+  num_episodes: 36
+  reward_stats:
+    max: 24.181001663208008
+    mean: -54.22431182861328
+    min: -2559.180908203125
+    std: 296.3711242675781
+  transitions: 10000
+- creation_time: '20250717_212034'
+  file_index: 3
+  filename: offline_rl_dataset_003_20250717_212034.h5
+  num_episodes: 31
+  reward_stats:
+    max: 23.4281005859375
+    mean: -53.683650970458984
+    min: -2322.264404296875
+    std: 279.0522155761719
+  transitions: 10000
+- creation_time: '20250717_212128'
+  file_index: 4
+  filename: offline_rl_dataset_004_20250717_212128.h5
+  num_episodes: 33
+  reward_stats:
+    max: 25.31394386291504
+    mean: 15.560678482055664
+    min: -13.801653861999512
+    std: 8.802090644836426
+  transitions: 10000
+- creation_time: '20250717_212220'
+  file_index: 5
+  filename: offline_rl_dataset_005_20250717_212220.h5
+  num_episodes: 35
+  reward_stats:
+    max: 24.859655380249023
+    mean: 8.99907112121582
+    min: -315.5246276855469
+    std: 34.13076400756836
+  transitions: 10000
+- creation_time: '20250717_212314'
+  file_index: 6
+  filename: offline_rl_dataset_006_20250717_212314.h5
+  num_episodes: 32
+  reward_stats:
+    max: 23.650468826293945
+    mean: 6.301512718200684
+    min: -341.7268371582031
+    std: 50.65880584716797
+  transitions: 10000
+- creation_time: '20250717_212407'
+  file_index: 7
+  filename: offline_rl_dataset_007_20250717_212407.h5
+  num_episodes: 34
+  reward_stats:
+    max: 26.833707809448242
+    mean: 10.261225700378418
+    min: -324.12335205078125
+    std: 33.51209259033203
+  transitions: 10000
+- creation_time: '20250717_212503'
+  file_index: 8
+  filename: offline_rl_dataset_008_20250717_212503.h5
+  num_episodes: 28
+  reward_stats:
+    max: 23.88907241821289
+    mean: -23.34482192993164
+    min: -355.56597900390625
+    std: 88.34075927734375
+  transitions: 10000
+- creation_time: '20250717_212555'
+  file_index: 9
+  filename: offline_rl_dataset_009_20250717_212555.h5
+  num_episodes: 28
+  reward_stats:
+    max: 24.216604232788086
+    mean: -32.47138214111328
+    min: -1837.8486328125
+    std: 192.8976287841797
+  transitions: 10000
+- creation_time: '20250717_212650'
+  file_index: 10
+  filename: offline_rl_dataset_010_20250717_212650.h5
+  num_episodes: 31
+  reward_stats:
+    max: 25.11664581298828
+    mean: -23.631685256958008
+    min: -374.34783935546875
+    std: 94.2148666381836
+  transitions: 10000
+- creation_time: '20250717_212742'
+  file_index: 11
+  filename: offline_rl_dataset_011_20250717_212742.h5
+  num_episodes: 35
+  reward_stats:
+    max: 24.995758056640625
+    mean: 10.164237976074219
+    min: -320.241455078125
+    std: 36.353477478027344
+  transitions: 10000
+- creation_time: '20250717_212837'
+  file_index: 12
+  filename: offline_rl_dataset_012_20250717_212837.h5
+  num_episodes: 30
+  reward_stats:
+    max: 25.40637969970703
+    mean: 5.974174976348877
+    min: -398.3547668457031
+    std: 55.052734375
+  transitions: 10000
+- creation_time: '20250717_212932'
+  file_index: 13
+  filename: offline_rl_dataset_013_20250717_212932.h5
+  num_episodes: 33
+  reward_stats:
+    max: 24.26015281677246
+    mean: -24.363889694213867
+    min: -1389.423828125
+    std: 147.96165466308594
+  transitions: 10000
+- creation_time: '20250717_213029'
+  file_index: 14
+  filename: offline_rl_dataset_014_20250717_213029.h5
+  num_episodes: 33
+  reward_stats:
+    max: 23.560714721679688
+    mean: -94.69588470458984
+    min: -2988.35009765625
+    std: 406.27593994140625
+  transitions: 10000
+- creation_time: '20250717_213121'
+  file_index: 15
+  filename: offline_rl_dataset_015_20250717_213121.h5
+  num_episodes: 16
+  reward_stats:
+    max: 24.223493576049805
+    mean: 16.017961502075195
+    min: -14.757421493530273
+    std: 7.40744686126709
+  transitions: 4987
+metadata:
+  action_dim: 2
+  device_used: cpu
+  max_speed: 4.0
+  observation_dim: 18
+  patch_size: 64
+  swae_enabled: true
