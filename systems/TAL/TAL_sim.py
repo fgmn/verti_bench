@@ -464,54 +464,54 @@ class TrajectoryCollector:
             except Exception as e:
                 logging.error(f"Failed to finalize trajectory file: {e}")
     
-    def _pad_to_size(self, patch, target_size):
-        """Pad patch to target size"""
-        current_h, current_w = patch.shape[:2]
-        if current_h >= target_size and current_w >= target_size:
-            return patch[:target_size, :target_size]
+    # def _pad_to_size(self, patch, target_size):
+    #     """Pad patch to target size"""
+    #     current_h, current_w = patch.shape[:2]
+    #     if current_h >= target_size and current_w >= target_size:
+    #         return patch[:target_size, :target_size]
         
-        # Calculate padding
-        pad_h = max(0, target_size - current_h)
-        pad_w = max(0, target_size - current_w)
+    #     # Calculate padding
+    #     pad_h = max(0, target_size - current_h)
+    #     pad_w = max(0, target_size - current_w)
         
-        if len(patch.shape) == 2:
-            padded = np.pad(patch, ((pad_h//2, pad_h - pad_h//2), (pad_w//2, pad_w - pad_w//2)), 
-                           mode='edge')
-        else:
-            padded = np.pad(patch, ((pad_h//2, pad_h - pad_h//2), (pad_w//2, pad_w - pad_w//2), (0, 0)), 
-                           mode='edge')
+    #     if len(patch.shape) == 2:
+    #         padded = np.pad(patch, ((pad_h//2, pad_h - pad_h//2), (pad_w//2, pad_w - pad_w//2)), 
+    #                        mode='edge')
+    #     else:
+    #         padded = np.pad(patch, ((pad_h//2, pad_h - pad_h//2), (pad_w//2, pad_w - pad_w//2), (0, 0)), 
+    #                        mode='edge')
         
-        return padded[:target_size, :target_size]
+    #     return padded[:target_size, :target_size]
     
-    def _rotate_patch(self, patch, angle_degrees):
-        """Rotate terrain patch by given angle"""
-        try:
-            from scipy.ndimage import rotate
-            return rotate(patch, angle_degrees, reshape=False, order=1, mode='nearest')
-        except ImportError:
-            logging.warning("scipy not available, skipping patch rotation")
-            return patch
+    # def _rotate_patch(self, patch, angle_degrees):
+    #     """Rotate terrain patch by given angle"""
+    #     try:
+    #         from scipy.ndimage import rotate
+    #         return rotate(patch, angle_degrees, reshape=False, order=1, mode='nearest')
+    #     except ImportError:
+    #         logging.warning("scipy not available, skipping patch rotation")
+    #         return patch
     
-    def _elevation_to_semantic(self, elevation_patch):
-        """Convert elevation data to a simple semantic visualization"""
-        # Normalize elevation to 0-255 range
-        elev_min = elevation_patch.min()
-        elev_max = elevation_patch.max()
+    # def _elevation_to_semantic(self, elevation_patch):
+    #     """Convert elevation data to a simple semantic visualization"""
+    #     # Normalize elevation to 0-255 range
+    #     elev_min = elevation_patch.min()
+    #     elev_max = elevation_patch.max()
         
-        if elev_max > elev_min:
-            normalized = ((elevation_patch - elev_min) / (elev_max - elev_min) * 255).astype(np.uint8)
-        else:
-            normalized = np.zeros_like(elevation_patch, dtype=np.uint8)
+    #     if elev_max > elev_min:
+    #         normalized = ((elevation_patch - elev_min) / (elev_max - elev_min) * 255).astype(np.uint8)
+    #     else:
+    #         normalized = np.zeros_like(elevation_patch, dtype=np.uint8)
         
-        # Create RGB semantic patch (simple terrain coloring)
-        semantic = np.zeros((elevation_patch.shape[0], elevation_patch.shape[1], 3), dtype=np.uint8)
+    #     # Create RGB semantic patch (simple terrain coloring)
+    #     semantic = np.zeros((elevation_patch.shape[0], elevation_patch.shape[1], 3), dtype=np.uint8)
         
-        # Low elevation = blue (water-like), high elevation = brown/green (terrain)
-        semantic[:, :, 0] = normalized  # Red channel for height
-        semantic[:, :, 1] = 255 - normalized  # Green channel (inverse height)
-        semantic[:, :, 2] = normalized // 2  # Blue channel
+    #     # Low elevation = blue (water-like), high elevation = brown/green (terrain)
+    #     semantic[:, :, 0] = normalized  # Red channel for height
+    #     semantic[:, :, 1] = 255 - normalized  # Green channel (inverse height)
+    #     semantic[:, :, 2] = normalized // 2  # Blue channel
         
-        return semantic
+    #     return semantic
 
 class TALSim:
     def __init__(self, config):
@@ -696,7 +696,7 @@ class TALSim:
         euler_angles = self.vehicle_manager.get_rotation()
         
         # Get velocity using chassis body (following gather_trajectories.py pattern)
-        chassis_body = self.vehicle_manager.vehicle.GetVehicle().GetChassisBody()
+        chassis_body = self.vehicle_manager.get_chassis_body()
         velocity = chassis_body.GetPosDt()
         
         # Get angular velocity components (following gather_trajectories.py pattern)
@@ -769,26 +769,26 @@ class TALSim:
             logging.debug(f"Failed to get terrain information: {e}")
         
         return {
-            'timestep': self.trajectory_collector.timestep,
-            'time': time,
-            'position': np.array([vehicle_pos.x, vehicle_pos.y, vehicle_pos.z]),
-            'orientation': np.array([euler_angles.x, euler_angles.y, euler_angles.z]),
-            'velocity': np.array([velocity.x, velocity.y, velocity.z]),
-            'angular_velocity': np.array([angular_velocity.x, angular_velocity.y, angular_velocity.z]),
-            'distance_to_goal': distance_to_goal,
-            'local_goal': np.array(local_goal),
-            'ground_height': ground_height,
-            'terrain_normal': terrain_normal,
-            'slope_angle': slope_angle
+            'timestep': self.trajectory_collector.timestep,           # 时间步数 [无量纲] - 仿真离散时间步计数器
+            'time': time,                                             # 仿真时间 [s] - 从仿真开始的累计时间
+            'position': np.array([vehicle_pos.x, vehicle_pos.y, vehicle_pos.z]),                    # 车辆位置 [m] - 世界坐标系下的三维位置 (x前进, y左侧, z向上)
+            'orientation': np.array([euler_angles.x, euler_angles.y, euler_angles.z]),             # 车辆姿态 [rad] - 欧拉角 (roll横滚, pitch俯仰, yaw偏航)
+            'velocity': np.array([velocity.x, velocity.y, velocity.z]),                            # 车辆线速度 [m/s] - 世界坐标系下的三维速度向量
+            'angular_velocity': np.array([angular_velocity.x, angular_velocity.y, angular_velocity.z]),  # 车辆角速度 [rad/s] - 绕xyz轴的旋转速度 (roll_rate, pitch_rate, yaw_rate)
+            'distance_to_goal': distance_to_goal,                     # 到目标距离 [m] - 车辆当前位置到最终目标的直线距离
+            'local_goal': np.array(local_goal),                       # 局部目标点 [m] - 路径规划中的当前子目标坐标 (x, y)
+            'ground_height': ground_height,                           # 地面高度 [m] - 车辆下方地形的高程值
+            'terrain_normal': terrain_normal,                         # 地形法向量 [无量纲] - 车辆下方地形表面的单位法向量 (nx, ny, nz)
+            'slope_angle': slope_angle                                # 坡度角 [rad] - 地形表面相对于水平面的倾斜角度 (0=平地, π/2=垂直)
         }
     
     def _collect_action_data(self):
         """Collect current action data for trajectory"""
         return {
-            'steering': self.driver_inputs.m_steering,
-            'throttle': self.driver_inputs.m_throttle,
-            'braking': self.driver_inputs.m_braking,
-            'target_speed': getattr(self, 'target_speed', 0.0)
+            'steering': self.driver_inputs.m_steering,          # 转向输入 [无量纲] - 归一化转向角度 (-1.0=右转, +1.0=左转)
+            'throttle': self.driver_inputs.m_throttle,          # 油门输入 [无量纲] - 归一化油门开度 (0.0=无油门, 1.0=全油门)
+            'braking': self.driver_inputs.m_braking,            # 制动输入 [无量纲] - 归一化制动力度 (0.0=无制动, 1.0=全制动)
+            'target_speed': getattr(self, 'target_speed', 0.0)  # 目标速度 [m/s] - 控制器期望达到的车辆速度
         }
             
     def initialize(self, start_pos=None, goal_pos=None):
