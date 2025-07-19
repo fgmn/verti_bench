@@ -88,9 +88,9 @@ class TrajectoryCollector:
                 meta_group.attrs['scale_factor'] = terrain_manager.scale_factor
                 
                 # Store elevation map as static data
-                if hasattr(terrain_manager, 'elevation_map') and terrain_manager.elevation_map is not None:
+                if hasattr(terrain_manager, 'high_res_data') and terrain_manager.high_res_data is not None:
                     terrain_group = f.create_group('terrain')
-                    terrain_group.create_dataset('elevation_map', data=terrain_manager.elevation_map, 
+                    terrain_group.create_dataset('elevation_map', data=terrain_manager.high_res_data, 
                                                 compression='gzip', compression_opts=9)
                     terrain_group.attrs['elevation_resolution'] = getattr(terrain_manager, 'elevation_resolution', 1.0)
                     terrain_group.attrs['elevation_origin'] = getattr(terrain_manager, 'elevation_origin', [0.0, 0.0])

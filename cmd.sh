@@ -13,7 +13,7 @@ python setup.py \
   --vehicle hmmwv \
   --system tal \
   --speed 4.0 \
-  --world_id 5 \
+  --world_id 99 \
   --scale_factor 1 \
   --max_time 60 \
   --num_experiments 1 \
@@ -24,7 +24,7 @@ python setup.py \
 #   --vehicle hmmwv \
 #   --system pid \
 #   --speed 4.0 \
-#   --world_id 24 \
+#   --world_id 26 \
 #   --scale_factor 1 \
 #   --max_time 600 \
 #   --num_experiments 1 \

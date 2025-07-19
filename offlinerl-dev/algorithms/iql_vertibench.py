@@ -1,14 +1,20 @@
-# source: https://github.com/gwthomas/IQL-PyTorch
-# https://arxiv.org/pdf/2110.06169.pdf
+"""
+IQL adapted for VertiBench custom environment and offline dataset.
+This script adapts the standard IQL algorithm to work with:
+1. Custom VertiBench environment (off_road_art)
+2. Custom offline dataset (HDF5 format from process_trajectories_for_offline_rl.py)
+3. Custom observation/action/reward structure
+"""
+
 import copy
 import os
 import random
 import uuid
+import h5py
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import d4rl
 import gym
 import numpy as np
 import pyrallis
@@ -19,8 +25,12 @@ import wandb
 from torch.distributions import Normal
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
-TensorBatch = List[torch.Tensor]
+# Import VertiBench environment
+import sys
+sys.path.append('/home/zkr/Documents/verti_bench')
+from rl.off_road_VertiBench_offlinerl import off_road_art
 
+TensorBatch = List[torch.Tensor]
 
 EXP_ADV_MAX = 100.0
 LOG_STD_MIN = -20.0
@@ -28,15 +38,18 @@ LOG_STD_MAX = 2.0
 
 
 @dataclass
-class TrainConfig:
+class VertiBenchTrainConfig:
     # Experiment
     device: str = "cuda"
-    env: str = "nav"  # OpenAI gym environment name
+    env_id: str = "VertiBench"  # Custom environment identifier
+    world_id: int = 5  # VertiBench world configuration
+    scale_factor: float = 1.0  # VertiBench scale factor
+    dataset_path: str = "/home/zkr/Documents/verti_bench/offline_rl_dataset"  # Path to HDF5 dataset
     seed: int = 0  # Sets Gym, PyTorch and Numpy seeds
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
-    n_episodes: int = 10  # How many episodes run during evaluation
+    n_episodes: int = 1  # How many episodes run during evaluation
     max_timesteps: int = int(1e6)  # Max time steps to run environment
-    checkpoints_path: Optional[str] = None  # Save path
+    checkpoints_path: Optional[str] = "/home/zkr/Documents/verti_bench/checkpoints"  # Save path
     load_model: str = ""  # Model load file name, "" doesn't load
     # IQL
     buffer_size: int = 2_000_000  # Replay buffer size
@@ -47,121 +60,20 @@ class TrainConfig:
     iql_tau: float = 0.7  # Coefficient for asymmetric loss
     iql_deterministic: bool = False  # Use deterministic actor
     normalize: bool = True  # Normalize states
-    normalize_reward: bool = False  # Normalize reward
+    normalize_reward: bool = True  # Normalize reward
     vf_lr: float = 3e-4  # V function learning rate
     qf_lr: float = 3e-4  # Critic learning rate
     actor_lr: float = 3e-4  # Actor learning rate
-    actor_dropout: Optional[float] = None  # Adroit uses dropout for policy network
+    actor_dropout: Optional[float] = None  # Dropout for policy network
     # Wandb logging
-    project: str = "CORL"
-    group: str = "IQL-D4RL"
-    name: str = "IQL"
+    project: str = "VertiBench-OfflineRL"
+    group: str = "IQL-VertiBench"
+    name: str = "IQL-VertiBench"
 
     def __post_init__(self):
-        self.name = f"{self.name}-{self.env}-{str(uuid.uuid4())[:8]}"
+        self.name = f"{self.name}-world{self.world_id}-{str(uuid.uuid4())[:8]}"
         if self.checkpoints_path is not None:
             self.checkpoints_path = os.path.join(self.checkpoints_path, self.name)
-
-
-def soft_update(target: nn.Module, source: nn.Module, tau: float):
-    for target_param, source_param in zip(target.parameters(), source.parameters()):
-        target_param.data.copy_((1 - tau) * target_param.data + tau * source_param.data)
-
-
-def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.ndarray]:
-    mean = states.mean(0)
-    std = states.std(0) + eps
-    return mean, std
-
-
-def normalize_states(states: np.ndarray, mean: np.ndarray, std: np.ndarray):
-    return (states - mean) / std
-
-
-def wrap_env(
-    env: gym.Env,
-    state_mean: Union[np.ndarray, float] = 0.0,
-    state_std: Union[np.ndarray, float] = 1.0,
-    reward_scale: float = 1.0,
-) -> gym.Env:
-    # PEP 8: E731 do not assign a lambda expression, use a def
-    # Z-score归一化，加速神经网络训练收敛，避免不同维度状态量级差异导致的学习偏差
-    def normalize_state(state):
-        return (
-            state - state_mean
-        ) / state_std  # epsilon should be already added in std.
-    
-    # 调整奖励的量级以匹配值函数的学习率
-    def scale_reward(reward):
-        # Please be careful, here reward is multiplied by scale!
-        return reward_scale * reward
-
-    env = gym.wrappers.TransformObservation(env, normalize_state)
-    if reward_scale != 1.0:
-        env = gym.wrappers.TransformReward(env, scale_reward)
-    return env
-
-
-class ReplayBuffer:
-    def __init__(
-        self,
-        state_dim: int,
-        action_dim: int,
-        buffer_size: int,
-        device: str = "cpu",
-    ):
-        self._buffer_size = buffer_size
-        self._pointer = 0
-        self._size = 0
-        # 数据存储张量（预分配GPU内存）
-        self._states = torch.zeros(
-            (buffer_size, state_dim), dtype=torch.float32, device=device
-        )
-        self._actions = torch.zeros(
-            (buffer_size, action_dim), dtype=torch.float32, device=device
-        )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
-        self._next_states = torch.zeros(
-            (buffer_size, state_dim), dtype=torch.float32, device=device
-        )
-        self._dones = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
-        self._device = device
-
-    def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
-        return torch.tensor(data, dtype=torch.float32, device=self._device)
-
-    # Loads data in d4rl format, i.e. from Dict[str, np.array].
-    def load_d4rl_dataset(self, data: Dict[str, np.ndarray]):
-        if self._size != 0:
-            raise ValueError("Trying to load data into non-empty replay buffer")
-        n_transitions = data["observations"].shape[0]
-        if n_transitions > self._buffer_size:
-            raise ValueError(
-                "Replay buffer is smaller than the dataset you are trying to load!"
-            )
-        self._states[:n_transitions] = self._to_tensor(data["observations"])
-        self._actions[:n_transitions] = self._to_tensor(data["actions"])
-        self._rewards[:n_transitions] = self._to_tensor(data["rewards"][..., None])
-        self._next_states[:n_transitions] = self._to_tensor(data["next_observations"])
-        self._dones[:n_transitions] = self._to_tensor(data["terminals"][..., None])
-        self._size += n_transitions
-        self._pointer = min(self._size, n_transitions)
-
-        print(f"Dataset size: {n_transitions}")
-
-    def sample(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, min(self._size, self._pointer), size=batch_size)
-        states = self._states[indices]
-        actions = self._actions[indices]
-        rewards = self._rewards[indices]
-        next_states = self._next_states[indices]
-        dones = self._dones[indices]
-        return [states, actions, rewards, next_states, dones]
-
-    def add_transition(self):
-        # Use this method to add new data into the replay buffer during fine-tuning.
-        # I left it unimplemented since now we do not do fine-tuning.
-        raise NotImplementedError
 
 
 def set_seed(
@@ -185,7 +97,155 @@ def wandb_init(config: dict) -> None:
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    wandb.run.save("checkpoints/*.pt")
+
+
+def soft_update(target: nn.Module, source: nn.Module, tau: float):
+    for target_param, source_param in zip(target.parameters(), source.parameters()):
+        target_param.data.copy_((1 - tau) * target_param.data + tau * source_param.data)
+
+
+def compute_mean_std(states: np.ndarray, eps: float) -> Tuple[np.ndarray, np.ndarray]:
+    mean = states.mean(0)
+    std = states.std(0) + eps
+    return mean, std
+
+
+def normalize_states(states: np.ndarray, mean: np.ndarray, std: np.ndarray):
+    return (states - mean) / std
+
+
+def wrap_env(
+    env: gym.Env,
+    state_mean: Union[np.ndarray, float] = 0.0,
+    state_std: Union[np.ndarray, float] = 1.0,
+    reward_scale: float = 1.0,
+) -> gym.Env:
+    """Wrap environment with normalization."""
+    def normalize_state(state):
+        return (state - state_mean) / state_std
+    
+    def scale_reward(reward):
+        return reward_scale * reward
+
+    env = gym.wrappers.TransformObservation(env, normalize_state)
+    if reward_scale != 1.0:
+        env = gym.wrappers.TransformReward(env, scale_reward)
+    return env
+
+
+class VertiBenchReplayBuffer:
+    """Replay buffer for VertiBench offline dataset."""
+    
+    def __init__(
+        self,
+        state_dim: int,
+        action_dim: int,
+        buffer_size: int,
+        device: str = "cpu",
+    ):
+        self._buffer_size = buffer_size
+        self._pointer = 0
+        self._size = 0
+
+        self._states = torch.zeros(
+            (buffer_size, state_dim), dtype=torch.float32, device=device
+        )
+        self._actions = torch.zeros(
+            (buffer_size, action_dim), dtype=torch.float32, device=device
+        )
+        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
+        self._next_states = torch.zeros(
+            (buffer_size, state_dim), dtype=torch.float32, device=device
+        )
+        self._dones = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
+        self._device = device
+
+    def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
+        return torch.tensor(data, dtype=torch.float32, device=self._device)
+
+    def load_vertibench_dataset(self, dataset_path: str):
+        """Load VertiBench HDF5 dataset."""
+        print(f"Loading VertiBench dataset from: {dataset_path}")
+        
+        # Find all HDF5 files in the dataset directory
+        hdf5_files = []
+        if os.path.isdir(dataset_path):
+            for file in os.listdir(dataset_path):
+                if file.endswith('.h5') or file.endswith('.hdf5'):
+                    hdf5_files.append(os.path.join(dataset_path, file))
+        elif os.path.isfile(dataset_path) and (dataset_path.endswith('.h5') or dataset_path.endswith('.hdf5')):
+            hdf5_files = [dataset_path]
+        else:
+            raise ValueError(f"Dataset path {dataset_path} is not a valid file or directory")
+        
+        if not hdf5_files:
+            raise ValueError(f"No HDF5 files found in {dataset_path}")
+        
+        print(f"Found {len(hdf5_files)} HDF5 files")
+        
+        # Load data from all files
+        all_states = []
+        all_actions = []
+        all_rewards = []
+        all_next_states = []
+        all_dones = []
+        
+        for file_path in hdf5_files:
+            print(f"Loading file: {file_path}")
+            with h5py.File(file_path, 'r') as f:
+                # Data is stored in 'transitions' group
+                transitions_group = f['transitions']
+                states = transitions_group['states'][:]
+                actions = transitions_group['actions'][:]
+                rewards = transitions_group['rewards'][:]
+                next_states = transitions_group['next_states'][:]
+                dones = transitions_group['dones'][:]
+                
+                all_states.append(states)
+                all_actions.append(actions)
+                all_rewards.append(rewards)
+                all_next_states.append(next_states)
+                all_dones.append(dones)
+                
+                print(f"  Loaded {len(states)} transitions")
+        
+        # Concatenate all data
+        dataset = {
+            'observations': np.concatenate(all_states, axis=0),
+            'actions': np.concatenate(all_actions, axis=0),
+            'rewards': np.concatenate(all_rewards, axis=0),
+            'next_observations': np.concatenate(all_next_states, axis=0),
+            'terminals': np.concatenate(all_dones, axis=0)
+        }
+        
+        print(f"Total dataset size: {len(dataset['observations'])} transitions")
+        print(f"State shape: {dataset['observations'].shape}")
+        print(f"Action shape: {dataset['actions'].shape}")
+        
+        # Store in buffer
+        size = min(len(dataset['observations']), self._buffer_size)
+        
+        self._states[:size] = self._to_tensor(dataset['observations'][:size])
+        self._actions[:size] = self._to_tensor(dataset['actions'][:size])
+        self._rewards[:size] = self._to_tensor(dataset['rewards'][:size].reshape(-1, 1))
+        self._next_states[:size] = self._to_tensor(dataset['next_observations'][:size])
+        self._dones[:size] = self._to_tensor(dataset['terminals'][:size].reshape(-1, 1))
+        
+        self._pointer = size
+        self._size = size
+        
+        print(f"Loaded {self._size} transitions into replay buffer")
+        return dataset
+
+    def sample(self, batch_size: int) -> TensorBatch:
+        indices = np.random.randint(0, self._size, size=batch_size)
+        states = self._states[indices]
+        actions = self._actions[indices]
+        rewards = self._rewards[indices]
+        next_states = self._next_states[indices]
+        dones = self._dones[indices]
+        return [states, actions, rewards, next_states, dones]
 
 
 @torch.no_grad()
@@ -218,21 +278,28 @@ def return_reward_range(dataset, max_episode_steps):
             returns.append(ep_ret)
             lengths.append(ep_len)
             ep_ret, ep_len = 0.0, 0
-    lengths.append(ep_len)  # but still keep track of number of steps
+    lengths.append(ep_len)
     assert sum(lengths) == len(dataset["rewards"])
     return min(returns), max(returns)
 
 
-def modify_reward(dataset, env_name, max_episode_steps=1000):
-    if any(s in env_name for s in ("halfcheetah", "hopper", "walker2d")):
-        # 奖励范围变化大，需要标准化
-        min_ret, max_ret = return_reward_range(dataset, max_episode_steps)
-        dataset["rewards"] /= max_ret - min_ret
-        dataset["rewards"] *= max_episode_steps
-    elif "antmaze" in env_name:
-        dataset["rewards"] -= 1.0
+def modify_reward_vertibench(dataset, max_episode_steps=1000):
+    """Modify rewards for VertiBench dataset."""
+    # For VertiBench, we might want to normalize rewards based on the reward range
+    min_ret, max_ret = return_reward_range(dataset, max_episode_steps)
+    print(f"Original reward range: [{min_ret:.3f}, {max_ret:.3f}]")
+    
+    # Optional: normalize rewards
+    if max_ret - min_ret > 0:
+        dataset["rewards"] = (dataset["rewards"] - min_ret) / (max_ret - min_ret)
+        # Verify normalization
+        new_min = dataset["rewards"].min()
+        new_max = dataset["rewards"].max()
+        print(f"Normalized reward range: [{new_min:.3f}, {new_max:.3f}]")
+    
+    return dataset
 
-# 非对称 L2 损失函数，用于训练价值函数
+
 def asymmetric_l2_loss(u: torch.Tensor, tau: float) -> torch.Tensor:
     return torch.mean(torch.abs(tau - (u < 0).float()) * u**2)
 
@@ -295,6 +362,7 @@ class GaussianPolicy(nn.Module):
         self.net = MLP(
             [state_dim, *([hidden_dim] * n_hidden), act_dim],
             output_activation_fn=nn.Tanh,
+            dropout=dropout,
         )
         self.log_std = nn.Parameter(torch.zeros(act_dim, dtype=torch.float32))
         self.max_action = max_action
@@ -409,15 +477,11 @@ class ImplicitQLearning:
         self.device = device
 
     def _update_v(self, observations, actions, log_dict) -> torch.Tensor:
-        # Update value function
         with torch.no_grad():
             target_q = self.q_target(observations, actions)
 
         v = self.vf(observations)
         adv = target_q - v
-        # 当 advantage > 0 时：权重为 tau
-        # 当 advantage < 0 时：权重为 |tau-1|
-        # 使 V(s) 学习数据中高优势动作的Q值
         v_loss = asymmetric_l2_loss(adv, self.iql_tau)
         log_dict["value_loss"] = v_loss.item()
         self.v_optimizer.zero_grad()
@@ -442,7 +506,6 @@ class ImplicitQLearning:
         q_loss.backward()
         self.q_optimizer.step()
 
-        # Update target Q network
         soft_update(self.q_target, self.qf, self.tau)
 
     def _update_policy(
@@ -452,11 +515,8 @@ class ImplicitQLearning:
         actions: torch.Tensor,
         log_dict: Dict,
     ):
-        # 优势加权回归（Advantage Weighted Regression）
-        # beta：逆温度参数，控制选择性强度
         exp_adv = torch.exp(self.beta * adv.detach()).clamp(max=EXP_ADV_MAX)
         policy_out = self.actor(observations)
-        # 行为克隆损失
         if isinstance(policy_out, torch.distributions.Distribution):
             bc_losses = -policy_out.log_prob(actions).sum(-1, keepdim=False)
         elif torch.is_tensor(policy_out):
@@ -465,7 +525,6 @@ class ImplicitQLearning:
             bc_losses = torch.sum((policy_out - actions) ** 2, dim=1)
         else:
             raise NotImplementedError
-        # 加权策略损失
         policy_loss = torch.mean(exp_adv * bc_losses)
         log_dict["actor_loss"] = policy_loss.item()
         self.actor_optimizer.zero_grad()
@@ -486,13 +545,10 @@ class ImplicitQLearning:
 
         with torch.no_grad():
             next_v = self.vf(next_observations)
-        # Update value function
         adv = self._update_v(observations, actions, log_dict)
         rewards = rewards.squeeze(dim=-1)
         dones = dones.squeeze(dim=-1)
-        # Update Q function
         self._update_q(next_v, observations, actions, rewards, dones, log_dict)
-        # Update actor
         self._update_policy(adv, observations, actions, log_dict)
 
         return log_dict
@@ -525,38 +581,48 @@ class ImplicitQLearning:
 
 
 @pyrallis.wrap()
-def train(config: TrainConfig):
-    env = gym.make(config.env)
+def train(config: VertiBenchTrainConfig):
+    """Train IQL on VertiBench environment and dataset."""
+    
+    # Create VertiBench environment
+    print(f"Creating VertiBench environment with world_id={config.world_id}, scale_factor={config.scale_factor}")
+    env = off_road_art(
+        world_id=config.world_id,
+        scale_factor=config.scale_factor,
+        additional_render_mode='None'
+    )
 
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.shape[0]
+    max_action = float(env.action_space.high[0])
 
-    dataset = d4rl.qlearning_dataset(env)
+    print(f"Environment specs:")
+    print(f"  State dimension: {state_dim}")
+    print(f"  Action dimension: {action_dim}")
+    print(f"  Max action: {max_action}")
+
+    # Create replay buffer and load dataset
+    replay_buffer = VertiBenchReplayBuffer(
+        state_dim,
+        action_dim,
+        config.buffer_size,
+        config.device,
+    )
+    dataset = replay_buffer.load_vertibench_dataset(config.dataset_path)
 
     if config.normalize_reward:
-        modify_reward(dataset, config.env)
+        dataset = modify_reward_vertibench(dataset)
+        # 同步归一化奖励到replay buffer
+        replay_buffer._rewards[:len(dataset["rewards"])] = torch.tensor(
+            dataset["rewards"].reshape(-1, 1), dtype=torch.float32, device=config.device
+        )
 
     if config.normalize:
         state_mean, state_std = compute_mean_std(dataset["observations"], eps=1e-3)
     else:
         state_mean, state_std = 0, 1
 
-    dataset["observations"] = normalize_states(
-        dataset["observations"], state_mean, state_std
-    )
-    dataset["next_observations"] = normalize_states(
-        dataset["next_observations"], state_mean, state_std
-    )
     env = wrap_env(env, state_mean=state_mean, state_std=state_std)
-    replay_buffer = ReplayBuffer(
-        state_dim,
-        action_dim,
-        config.buffer_size,
-        config.device,
-    )
-    replay_buffer.load_d4rl_dataset(dataset)
-
-    max_action = float(env.action_space.high[0])
 
     if config.checkpoints_path is not None:
         print(f"Checkpoints path: {config.checkpoints_path}")
@@ -568,6 +634,7 @@ def train(config: TrainConfig):
     seed = config.seed
     set_seed(seed, env)
 
+    # Create networks
     q_network = TwinQ(state_dim, action_dim).to(config.device)
     v_network = ValueFunction(state_dim).to(config.device)
     actor = (
@@ -579,10 +646,13 @@ def train(config: TrainConfig):
             state_dim, action_dim, max_action, dropout=config.actor_dropout
         )
     ).to(config.device)
+    
+    # Create optimizers
     v_optimizer = torch.optim.Adam(v_network.parameters(), lr=config.vf_lr)
     q_optimizer = torch.optim.Adam(q_network.parameters(), lr=config.qf_lr)
     actor_optimizer = torch.optim.Adam(actor.parameters(), lr=config.actor_lr)
 
+    # Initialize IQL trainer
     kwargs = {
         "max_action": max_action,
         "actor": actor,
@@ -594,17 +664,15 @@ def train(config: TrainConfig):
         "discount": config.discount,
         "tau": config.tau,
         "device": config.device,
-        # IQL
         "beta": config.beta,
         "iql_tau": config.iql_tau,
         "max_steps": config.max_timesteps,
     }
 
     print("---------------------------------------")
-    print(f"Training IQL, Env: {config.env}, Seed: {seed}")
+    print(f"Training IQL on VertiBench, World: {config.world_id}, Seed: {seed}")
     print("---------------------------------------")
 
-    # Initialize actor
     trainer = ImplicitQLearning(**kwargs)
 
     if config.load_model != "":
@@ -620,6 +688,7 @@ def train(config: TrainConfig):
         batch = [b.to(config.device) for b in batch]
         log_dict = trainer.train(batch)
         wandb.log(log_dict, step=trainer.total_it)
+        
         # Evaluate episode
         if (t + 1) % config.eval_freq == 0:
             print(f"Time steps: {t + 1}")
@@ -631,22 +700,19 @@ def train(config: TrainConfig):
                 seed=config.seed,
             )
             eval_score = eval_scores.mean()
-            normalized_eval_score = env.get_normalized_score(eval_score) * 100.0
-            evaluations.append(normalized_eval_score)
+            evaluations.append(eval_score)
             print("---------------------------------------")
-            print(
-                f"Evaluation over {config.n_episodes} episodes: "
-                f"{eval_score:.3f} , D4RL score: {normalized_eval_score:.3f}"
-            )
+            print(f"Evaluation over {config.n_episodes} episodes: {eval_score:.3f}")
             print("---------------------------------------")
+            
             if config.checkpoints_path is not None:
                 torch.save(
                     trainer.state_dict(),
                     os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
                 )
-            wandb.log(
-                {"d4rl_normalized_score": normalized_eval_score}, step=trainer.total_it
-            )
+            wandb.log({"eval_score": eval_score}, step=trainer.total_it)
+
+    return trainer, evaluations
 
 
 if __name__ == "__main__":

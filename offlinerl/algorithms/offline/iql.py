@@ -31,7 +31,7 @@ LOG_STD_MAX = 2.0
 class TrainConfig:
     # Experiment
     device: str = "cuda"
-    env: str = "halfcheetah-medium-expert-v2"  # OpenAI gym environment name
+    env: str = "bullet-halfcheetah-medium-expert-v0"  # OpenAI gym environment name
     seed: int = 0  # Sets Gym, PyTorch and Numpy seeds
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
     n_episodes: int = 10  # How many episodes run during evaluation
@@ -185,7 +185,8 @@ def wandb_init(config: dict) -> None:
         name=config["name"],
         id=str(uuid.uuid4()),
     )
-    wandb.run.save()
+    # wandb.run.save()
+    wandb.run.save("checkpoints/*.pt")
 
 
 @torch.no_grad()

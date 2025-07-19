@@ -1,6 +1,7 @@
 import gymnasium as gym
 import numpy as np
 import os
+import random
 from verti_bench.envs.utils.terrain_utils import SCMParameters
 from verti_bench.envs.utils.asset_utils import *
 from verti_bench.envs.utils.utils import SetChronoDataDirectories
@@ -542,12 +543,42 @@ class off_road_art(ChronoBaseEnv):
                 'vehicle_states': []
             }
 
-            return self.m_observation, info
+            # return self.m_observation, info
+            return self.m_observation
         
         except Exception as e:
             logging.exception("Exception in reset method")
             print(f"Failed to reset environment: {e}")
             raise e
+
+    def seed(self, seed=None):
+        """
+        Set the seed for the environment's random number generators.
+        
+        Args:
+            seed: Random seed value. If None, a random seed will be generated.
+            
+        Returns:
+            [seed]: List containing the seed used for this environment
+        """
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+        
+        # Set seeds for different random number generators
+        random.seed(seed)
+        np.random.seed(seed)
+        
+        # Set PyTorch seed if available
+        try:
+            import torch
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed(seed)
+                torch.cuda.manual_seed_all(seed)
+        except ImportError:
+            pass
+        
+        return [seed]
 
     def step(self, action):
         """
@@ -694,7 +725,9 @@ class off_road_art(ChronoBaseEnv):
             self.steering_data = []
             self.vehicle_states = []
             
-            return self.m_observation, self.m_reward, self.m_terminated, self.m_truncated, info
+            done = self.m_terminated or self.m_truncated
+
+            return self.m_observation, self.m_reward, done, info
 
         except Exception as e:
             logging.exception("Exception in step method")
