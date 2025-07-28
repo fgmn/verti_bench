@@ -29,6 +29,8 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 import sys
 sys.path.append('/home/zkr/Documents/verti_bench')
 from rl.off_road_VertiBench_offlinerl import off_road_art
+from offlinerl_dev.modules.buffer import VertiBenchReplayBuffer
+
 
 TensorBatch = List[torch.Tensor]
 
@@ -47,8 +49,8 @@ class VertiBenchTrainConfig:
     dataset_path: str = "/home/zkr/Documents/verti_bench/offline_rl_dataset"  # Path to HDF5 dataset
     seed: int = 0  # Sets Gym, PyTorch and Numpy seeds
     eval_freq: int = int(5e3)  # How often (time steps) we evaluate
-    n_episodes: int = 1  # How many episodes run during evaluation
-    max_timesteps: int = int(1e6)  # Max time steps to run environment
+    n_episodes: int = 5  # How many episodes run during evaluation
+    max_timesteps: int = int(1e5)  # Max time steps to run environment
     checkpoints_path: Optional[str] = "/home/zkr/Documents/verti_bench/checkpoints"  # Save path
     load_model: str = ""  # Model load file name, "" doesn't load
     # IQL
@@ -61,9 +63,9 @@ class VertiBenchTrainConfig:
     iql_deterministic: bool = False  # Use deterministic actor
     normalize: bool = True  # Normalize states
     normalize_reward: bool = True  # Normalize reward
-    vf_lr: float = 3e-4  # V function learning rate
-    qf_lr: float = 3e-4  # Critic learning rate
-    actor_lr: float = 3e-4  # Actor learning rate
+    vf_lr: float = 1e-4  # V function learning rate
+    qf_lr: float = 1e-4  # Critic learning rate
+    actor_lr: float = 1e-4  # Actor learning rate
     actor_dropout: Optional[float] = None  # Dropout for policy network
     # Wandb logging
     project: str = "VertiBench-OfflineRL"
@@ -123,6 +125,12 @@ def wrap_env(
 ) -> gym.Env:
     """Wrap environment with normalization."""
     def normalize_state(state):
+        # 如果是新版 Gym 那种 (obs, info) 的 tuple
+        if isinstance(state, tuple) and len(state) == 2:
+            obs, info = state
+            obs = (obs - state_mean) / state_std
+            return obs, info
+        # 否则直接当成 ndarray
         return (state - state_mean) / state_std
     
     def scale_reward(reward):
@@ -133,121 +141,6 @@ def wrap_env(
         env = gym.wrappers.TransformReward(env, scale_reward)
     return env
 
-
-class VertiBenchReplayBuffer:
-    """Replay buffer for VertiBench offline dataset."""
-    
-    def __init__(
-        self,
-        state_dim: int,
-        action_dim: int,
-        buffer_size: int,
-        device: str = "cpu",
-    ):
-        self._buffer_size = buffer_size
-        self._pointer = 0
-        self._size = 0
-
-        self._states = torch.zeros(
-            (buffer_size, state_dim), dtype=torch.float32, device=device
-        )
-        self._actions = torch.zeros(
-            (buffer_size, action_dim), dtype=torch.float32, device=device
-        )
-        self._rewards = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
-        self._next_states = torch.zeros(
-            (buffer_size, state_dim), dtype=torch.float32, device=device
-        )
-        self._dones = torch.zeros((buffer_size, 1), dtype=torch.float32, device=device)
-        self._device = device
-
-    def _to_tensor(self, data: np.ndarray) -> torch.Tensor:
-        return torch.tensor(data, dtype=torch.float32, device=self._device)
-
-    def load_vertibench_dataset(self, dataset_path: str):
-        """Load VertiBench HDF5 dataset."""
-        print(f"Loading VertiBench dataset from: {dataset_path}")
-        
-        # Find all HDF5 files in the dataset directory
-        hdf5_files = []
-        if os.path.isdir(dataset_path):
-            for file in os.listdir(dataset_path):
-                if file.endswith('.h5') or file.endswith('.hdf5'):
-                    hdf5_files.append(os.path.join(dataset_path, file))
-        elif os.path.isfile(dataset_path) and (dataset_path.endswith('.h5') or dataset_path.endswith('.hdf5')):
-            hdf5_files = [dataset_path]
-        else:
-            raise ValueError(f"Dataset path {dataset_path} is not a valid file or directory")
-        
-        if not hdf5_files:
-            raise ValueError(f"No HDF5 files found in {dataset_path}")
-        
-        print(f"Found {len(hdf5_files)} HDF5 files")
-        
-        # Load data from all files
-        all_states = []
-        all_actions = []
-        all_rewards = []
-        all_next_states = []
-        all_dones = []
-        
-        for file_path in hdf5_files:
-            print(f"Loading file: {file_path}")
-            with h5py.File(file_path, 'r') as f:
-                # Data is stored in 'transitions' group
-                transitions_group = f['transitions']
-                states = transitions_group['states'][:]
-                actions = transitions_group['actions'][:]
-                rewards = transitions_group['rewards'][:]
-                next_states = transitions_group['next_states'][:]
-                dones = transitions_group['dones'][:]
-                
-                all_states.append(states)
-                all_actions.append(actions)
-                all_rewards.append(rewards)
-                all_next_states.append(next_states)
-                all_dones.append(dones)
-                
-                print(f"  Loaded {len(states)} transitions")
-        
-        # Concatenate all data
-        dataset = {
-            'observations': np.concatenate(all_states, axis=0),
-            'actions': np.concatenate(all_actions, axis=0),
-            'rewards': np.concatenate(all_rewards, axis=0),
-            'next_observations': np.concatenate(all_next_states, axis=0),
-            'terminals': np.concatenate(all_dones, axis=0)
-        }
-        
-        print(f"Total dataset size: {len(dataset['observations'])} transitions")
-        print(f"State shape: {dataset['observations'].shape}")
-        print(f"Action shape: {dataset['actions'].shape}")
-        
-        # Store in buffer
-        size = min(len(dataset['observations']), self._buffer_size)
-        
-        self._states[:size] = self._to_tensor(dataset['observations'][:size])
-        self._actions[:size] = self._to_tensor(dataset['actions'][:size])
-        self._rewards[:size] = self._to_tensor(dataset['rewards'][:size].reshape(-1, 1))
-        self._next_states[:size] = self._to_tensor(dataset['next_observations'][:size])
-        self._dones[:size] = self._to_tensor(dataset['terminals'][:size].reshape(-1, 1))
-        
-        self._pointer = size
-        self._size = size
-        
-        print(f"Loaded {self._size} transitions into replay buffer")
-        return dataset
-
-    def sample(self, batch_size: int) -> TensorBatch:
-        indices = np.random.randint(0, self._size, size=batch_size)
-        states = self._states[indices]
-        actions = self._actions[indices]
-        rewards = self._rewards[indices]
-        next_states = self._next_states[indices]
-        dones = self._dones[indices]
-        return [states, actions, rewards, next_states, dones]
-
-
 @torch.no_grad()
 def eval_actor(
     env: gym.Env, actor: nn.Module, device: str, n_episodes: int, seed: int
@@ -255,17 +148,58 @@ def eval_actor(
     env.seed(seed)
     actor.eval()
     episode_rewards = []
-    for _ in range(n_episodes):
-        state, done = env.reset(), False
+    times_to_goal   = []
+    successes       = []
+    avg_pitches     = []
+    avg_rolls       = []
+
+    import json
+    with open("/home/zkr/Documents/verti_bench/envs/data/BenchMaps/sampled_maps/Configs/Final/config_labels.json", "r") as f:
+        groups = json.load(f)
+    # difficulty_low          = groups["difficulty"]["low"]
+    # difficulty_mid          = groups["difficulty"]["mid"]
+    # n_low = n_episodes//2
+    # n_mid = n_episodes- n_low
+    # test_world_ids = difficulty_low[:n_low] + difficulty_mid[:n_mid]
+
+    difficulty_mid          = groups["difficulty"]["mid"]
+    test_world_ids = difficulty_mid[:n_episodes]
+    test_world_ids.reverse()  # Reverse to match the order in which they were sampled
+
+    # for _ in range(n_episodes):
+    for test_world_id in test_world_ids:
+        pitch_list = []
+        roll_list  = []
+        # state, info = env.reset()
+        state, info = env.full_reset(world_id=test_world_id)
+        done = False
         episode_reward = 0.0
         while not done:
             action = actor.act(state, device)
-            state, reward, done, _ = env.step(action)
+            state, reward, done, info = env.step(action)
             episode_reward += reward
+            pitch_list.extend(info.get('pitch_angles', []))
+            roll_list.extend( info.get('roll_angles',  []))
         episode_rewards.append(episode_reward)
+        times_to_goal.append(info.get('time_to_goal') or np.nan)
+        successes.append(    info.get('success',    False))
+        avg_pitches.append(np.mean(pitch_list) if pitch_list else np.nan)
+        avg_rolls.append(  np.mean(roll_list)  if roll_list  else np.nan)
+        
+        print(f"Episode finished with reward: {episode_reward:.2f}, "
+                f"time to goal: {info.get('time_to_goal') or np.nan:.2f}, "
+                f"success: {info.get('success', False)}, "
+                f"avg pitch: {np.mean(pitch_list) if pitch_list else np.nan:.2f}, "
+                f"avg roll: {np.mean(roll_list) if roll_list else np.nan:.2f}")
 
     actor.train()
-    return np.asarray(episode_rewards)
+    return (
+        np.asarray(episode_rewards),
+        np.asarray(times_to_goal),
+        np.asarray(successes),
+        np.asarray(avg_pitches),
+        np.asarray(avg_rolls),
+    )
 
 
 def return_reward_range(dataset, max_episode_steps):
@@ -527,6 +461,7 @@ class ImplicitQLearning:
             raise NotImplementedError
         policy_loss = torch.mean(exp_adv * bc_losses)
         log_dict["actor_loss"] = policy_loss.item()
+        log_dict["bc_loss"] = bc_losses.mean().item()
         self.actor_optimizer.zero_grad()
         policy_loss.backward()
         self.actor_optimizer.step()
@@ -692,25 +627,50 @@ def train(config: VertiBenchTrainConfig):
         # Evaluate episode
         if (t + 1) % config.eval_freq == 0:
             print(f"Time steps: {t + 1}")
-            eval_scores = eval_actor(
+
+            # Now eval_actor returns five arrays:
+            # (rewards, times_to_goal, successes, avg_pitches, avg_rolls)
+            eval_rewards, eval_times, eval_successes, eval_pitches, eval_rolls = eval_actor(
                 env,
                 actor,
                 device=config.device,
                 n_episodes=config.n_episodes,
                 seed=config.seed,
             )
-            eval_score = eval_scores.mean()
-            evaluations.append(eval_score)
+
+            # Compute whatever you want to track
+            reward_mean      = np.mean(eval_rewards)
+            time_mean        = np.nanmean(eval_times)
+            success_rate     = np.mean(eval_successes)
+            pitch_mean       = np.nanmean(eval_pitches)
+            roll_mean        = np.nanmean(eval_rolls)
+
+            evaluations.append(reward_mean)
+
             print("---------------------------------------")
-            print(f"Evaluation over {config.n_episodes} episodes: {eval_score:.3f}")
+            print(f"Eval over {config.n_episodes} eps:")
+            print(f"  reward   : {reward_mean:.3f}")
+            print(f"  time     : {time_mean:.3f}")
+            print(f"  success  : {success_rate*100:.1f}%")
+            print(f"  pitch ⌀  : {pitch_mean:.3f}")
+            print(f"  roll  ⌀  : {roll_mean:.3f}")
             print("---------------------------------------")
-            
+
+            # checkpointing
             if config.checkpoints_path is not None:
                 torch.save(
                     trainer.state_dict(),
                     os.path.join(config.checkpoints_path, f"checkpoint_{t}.pt"),
                 )
-            wandb.log({"eval_score": eval_score}, step=trainer.total_it)
+
+            # log them all to WandB
+            wandb.log({
+                "eval/reward_mean"     : reward_mean,
+                "eval/time_mean"       : time_mean,
+                "eval/success_rate"    : success_rate,
+                "eval/pitch_mean"      : pitch_mean,
+                "eval/roll_mean"       : roll_mean,
+            }, step=trainer.total_it)
 
     return trainer, evaluations
 

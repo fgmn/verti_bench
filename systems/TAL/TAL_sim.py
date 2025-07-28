@@ -1088,3 +1088,95 @@ class TALSim:
             
         return None, False, 0, 0  # Return default values if loop exits unexpectedly
     
+
+import json
+import pandas as pd
+import numpy as np
+import contextlib
+from verti_bench.envs.utils.utils import SetChronoDataDirectories
+
+def multi_experiment(base_config,
+                     runs_per_world=10,
+                     config_json_path=None,
+                     csv_path=None):
+    """
+    对指定的世界 ID 进行重复实验，并汇总结果。
+
+    :param base_config: dict, 单次实验的基础配置字典（不含 world_id）
+    :param runs_per_world: int, 每个 world_id 重复实验的次数
+    :param config_json_path: str, 保存 low/mid/high id 列表的 JSON 的路径
+    :param csv_path: str or None, 如果提供，则会把结果写到该 CSV 文件
+    :return: pandas.DataFrame, 包含所有实验结果
+    """
+    # if config_json_path is None or not os.path.isfile(config_json_path):
+    #     raise FileNotFoundError(f"Cannot find config JSON at {config_json_path}")
+
+    # # 1) 读取 JSON
+    # with open(config_json_path, 'r') as f:
+    #     labels = json.load(f)
+
+    # low_ids = labels['difficulty'].get('low', [])
+    # mid_ids = labels['difficulty'].get('mid', [])
+    # high_ids = labels['difficulty'].get('high', [])
+
+    # world_ids = sorted(low_ids + mid_ids + high_ids)
+
+    world_ids = [i for i in range(1, 101)]  # 假设我们要测试所有 100 个世界
+
+    records = []
+    for world_id in world_ids:
+        for run_idx in range(runs_per_world):
+            # 将 world_id 注入配置
+            config = base_config.copy()
+            config['world_id'] = world_id
+
+            # 静默运行：屏蔽所有 stdout/stderr
+            with open(os.devnull, 'w') as devnull, \
+                 contextlib.redirect_stdout(devnull), \
+                 contextlib.redirect_stderr(devnull):
+                gym = TALSim(config)
+                gym.initialize()
+                t2g, success, rolls, pitches = gym.run()
+            
+            # 这里是每次实验新定义一个Gym因而success的获取没问题
+            records.append({
+                'world_id':      world_id,
+                'run_idx':       run_idx,
+                'time_to_goal':  t2g,
+                'success':       success,
+                'avg_roll_deg':  np.mean(rolls) if rolls else np.nan,
+                'avg_pitch_deg': np.mean(pitches) if pitches else np.nan,
+            })
+
+            # 可以选择保留进度打印
+            print(f"[world {world_id} run {run_idx:02d}] time={t2g}, success={success}")
+
+    df = pd.DataFrame(records)
+
+    if csv_path:
+        df.to_csv(csv_path, index=False)
+        print(f"Saved all results to {csv_path}")
+
+    return df
+
+
+if __name__ == "__main__":
+    SetChronoDataDirectories()
+    base_config = {
+        'scale_factor': 1.0,
+        'render': False,
+        'use_gui': False,
+        'vehicle': 'hmmwv',
+        'system': 'tal',
+        'max_time': 60.0,
+        'speed': 8.0,
+        'collect_trajectory': True,   # 多实验时一般关闭数据收集，免得文件爆炸
+    }
+
+    df = multi_experiment(
+        base_config,
+        runs_per_world=5,
+        config_json_path='/home/zkr/Documents/verti_bench/envs/data/BenchMaps/sampled_maps/Configs/Final/config_ids.json',
+        csv_path='tal_multi_experiment_results.csv'
+    )
+    print(df.groupby('world_id')['success'].mean())

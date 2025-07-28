@@ -70,3 +70,4 @@ assets/pychrono-9.0.1-py39_1.tar.bz2
 /systems/TAL/tal_batch_results*
 /wandb
 /checkpoints
+*.csv

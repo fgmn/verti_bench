@@ -9,7 +9,7 @@ from verti_bench.rl.ChronoBase import ChronoBaseEnv
 
 import pychrono.vehicle as veh 
 import pychrono as chrono
-from typing import Any
+from typing import Any, Optional
 import logging
 from PIL import Image, ImageDraw
 import matplotlib.pyplot as plt
@@ -321,7 +321,7 @@ class off_road_art(ChronoBaseEnv):
             self.last_position = None  
             self.stuck_counter = 0     
             self.STUCK_DISTANCE = 0.01 
-            self.STUCK_TIME = 10.0      
+            self.STUCK_TIME = 2.0   # default: 10.0      
             
             # Sensor manager
             self.m_sens_manager = None  # Sensor manager for the simulation
@@ -396,6 +396,7 @@ class off_road_art(ChronoBaseEnv):
             # -------------------------------
             # Reset the vehicle
             # -------------------------------
+            # Corresponds to initialize_vehicle() in the HMMWVManager
             self.m_vehicle = veh.HMMWV_Reduced(self.m_system)
             self.m_vehicle.SetContactMethod(chrono.ChContactMethod_NSC)
             self.m_vehicle.SetChassisCollisionType(veh.CollisionType_PRIMITIVES)
@@ -433,6 +434,7 @@ class off_road_art(ChronoBaseEnv):
                 self.global_path,
                 self.local_goal_idx
             )
+            self.set_local_goal(self.m_system, self.local_goal)
             
             # Terrain textures from config
             property_dict, terrain_labels, texture_options, terrain_patches = self.load_texture_config()
@@ -523,7 +525,15 @@ class off_road_art(ChronoBaseEnv):
             self.stuck_counter = 0
             self.m_terminated = False
             self.m_truncated = False
-            
+
+            # # Reset episode statistics
+            # self.m_success_count = 0
+            # self.m_episode_num   = 0
+            # self.m_timeout_count = 0
+            # self.m_crash_count   = 0
+            # self.m_fallen_count  = 0
+            # self.m_stuck_count   = 0
+
             # Clear tracking variables
             self.time_to_goal = None
             self.roll_angles = []
@@ -532,24 +542,156 @@ class off_road_art(ChronoBaseEnv):
             self.steering_data = []
             self.vehicle_states = []
             
+            # Store raw data
+            euler_angles = self.m_vehicle.GetVehicle().GetRot().GetCardanAnglesXYZ()
+            roll = euler_angles.x
+            pitch = euler_angles.y
+            vehicle_heading = euler_angles.z
+            self.roll_angles.append(np.degrees(abs(roll)))
+            self.pitch_angles.append(np.degrees(abs(pitch)))
+            # self.throttle_data.append(self.m_driver_inputs.m_throttle)
+            # self.steering_data.append(self.m_driver_inputs.m_steering)
+            # Store vehicle state
+            vehicle_state = {
+                'time': self.m_system.GetChTime(),
+                'x': self.m_vehicle_pos.x,
+                'y': self.m_vehicle_pos.y,
+                'z': self.m_vehicle_pos.z,
+                'roll': np.degrees(roll),
+                'pitch': np.degrees(pitch),
+                'yaw': np.degrees(vehicle_heading)
+            }
+            # print(f"Vehicle state: {vehicle_state}")
+            self.vehicle_states.append(vehicle_state)
+
             info = {
                 'current_time': 0,
                 'time_to_goal': None,
                 'success': False,
-                'roll_angles': [],
-                'pitch_angles': [],
+                'roll_angles': self.roll_angles.copy(),
+                'pitch_angles': self.pitch_angles.copy(),
                 'throttle_data': [],
                 'steering_data': [],
-                'vehicle_states': []
+                'vehicle_states': self.vehicle_states.copy(),
+                'local_goal': self.local_goal,
+                'pos': self.m_vehicle_pos,
+                'euler_angles': euler_angles,
             }
 
-            # return self.m_observation, info
-            return self.m_observation
+            return self.m_observation, info
+            # return self.m_observation
         
         except Exception as e:
             logging.exception("Exception in reset method")
             print(f"Failed to reset environment: {e}")
             raise e
+
+    def full_reset(
+        self,
+        world_id: int,
+        scale_factor: Optional[float] = None,
+        additional_render_mode: Optional[str] = None,
+    ):
+        """
+        Completely reset the environment to a new world configuration.
+
+        1. Update world_id (and optionally scale_factor or render mode).
+        2. Reload terrain config YAML, bitmap, and high-res heightmap.
+        3. Clear any previous episode statistics.
+        4. Call reset() to reinitialize Chrono, the vehicle, terrain, etc.
+        """
+        # 1. Update environment settings
+        self.world_id = world_id
+        if scale_factor is not None:
+            self.scale_factor = scale_factor
+        if additional_render_mode is not None:
+            if additional_render_mode not in self.metadata['additional_render.modes']:
+                raise ValueError(f"Render mode {additional_render_mode} is not supported")
+            self.m_additional_render_mode = additional_render_mode
+
+        # 2. Reload configuration YAML for the new world
+        config_pattern = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            "../envs/data/BenchMaps/sampled_maps/Configs/Final",
+            f"config{self.world_id}_*.yaml"
+        )
+        matches = glob.glob(config_pattern)
+        if not matches:
+            raise FileNotFoundError(f"No config file matching: {config_pattern}")
+        self.config_path = matches[0]
+        with open(self.config_path, 'r') as f:
+            self.config = yaml.safe_load(f)
+        print(f"[full_reset] Loaded config: {self.config_path}")
+
+        # Update terrain parameters from the loaded config
+        self.m_terrain_length     = self.config['terrain']['length'] * self.scale_factor
+        self.m_terrain_width      = self.config['terrain']['width'] * self.scale_factor
+        self.m_min_terrain_height = self.config['terrain']['min_height'] * self.scale_factor
+        self.m_max_terrain_height = self.config['terrain']['max_height'] * self.scale_factor
+        self.difficulty           = self.config['terrain']['difficulty']
+        self.m_isFlat             = self.config['terrain']['is_flat']
+        self.positions            = self.config['positions']
+        self.terrain_type         = self.config['terrain_type']
+        self.obstacle_flag        = self.config['obstacles_flag']
+        self.obstacle_density     = self.config['obstacle_density']
+        self.textures             = self.config['textures']
+
+        # Randomly select a start/goal pair
+        self.pos_id   = random.randint(0, len(self.positions) - 1)
+        self.start_pos, self.goal_pos = (
+            self.positions[self.pos_id]['start'],
+            self.positions[self.pos_id]['goal']
+        )
+
+        # Reload low-res terrain bitmap
+        bmp_file = f"{self.world_id}.bmp"
+        bmp_path = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            "../envs/data/BenchMaps/sampled_maps/Worlds",
+            bmp_file
+        )
+        self.terrain_image = Image.open(bmp_path)
+        self.terrain_array = np.array(self.terrain_image)
+        self.bmp_dim_y, self.bmp_dim_x = self.terrain_array.shape
+
+        # Reload high-res heightmap
+        high_res_pattern = os.path.join(
+            os.path.dirname(os.path.realpath(__file__)),
+            "../envs/data/BenchMaps/sampled_maps/Configs/Final",
+            f"height{self.world_id}_*.npy"
+        )
+        hr_match = glob.glob(high_res_pattern)
+        if not hr_match:
+            raise FileNotFoundError(f"No high-res file matching: {high_res_pattern}")
+        hr_data = np.load(hr_match[0])
+        # Apply the same flip/rotate transformations as in __init__
+        hr_data = np.flip(hr_data, axis=1)
+        hr_data = np.rot90(hr_data, k=1, axes=(1, 0))
+        self.high_res_data = np.rot90(hr_data, k=1, axes=(1, 0))
+        self.high_res_dim_y, self.high_res_dim_x = self.high_res_data.shape
+
+        # Reset terrain-type flags
+        if self.terrain_type == 'rigid':
+            self.is_rigid = True
+            self.is_deformable = False
+        elif self.terrain_type == 'deformable':
+            self.is_rigid = False
+            self.is_deformable = True
+        else:
+            # mixed or other types
+            self.is_rigid = True
+            self.is_deformable = True
+
+        # 3. Clear previous episode statistics
+        self.time_to_goal   = None
+        self.roll_angles    = []
+        self.pitch_angles   = []
+        self.throttle_data  = []
+        self.steering_data  = []
+        self.vehicle_states = []
+
+        # 4. Call reset() to rebuild the Chrono system and return new observation/info
+        return self.reset()
 
     def seed(self, seed=None):
         """
@@ -619,7 +761,9 @@ class off_road_art(ChronoBaseEnv):
                 self.global_path,
                 self.local_goal_idx
             )
+            self.set_local_goal(self.m_system, self.local_goal)
             
+            # Corresponds to compute_throttle() in the Planner
             # Desired throttle/braking value
             out_throttle = self.m_speedController.Advance(
                 self.m_vehicle.GetVehicle().GetRefFrame(), speed, time, self.m_step_size)
@@ -635,28 +779,7 @@ class off_road_art(ChronoBaseEnv):
             # Apply the steering input with smoothing
             self.m_driver_inputs.m_steering = np.clip(steering, -1.0, 1.0)
 
-            # Store raw data
-            euler_angles = self.m_vehicle.GetVehicle().GetRot().GetCardanAnglesXYZ()
-            roll = euler_angles.x
-            pitch = euler_angles.y
-            vehicle_heading = euler_angles.z
-            self.roll_angles.append(np.degrees(abs(roll)))
-            self.pitch_angles.append(np.degrees(abs(pitch)))
-            self.throttle_data.append(self.m_driver_inputs.m_throttle)
-            self.steering_data.append(self.m_driver_inputs.m_steering)
-            # Store vehicle state
-            vehicle_state = {
-                'time': self.m_system.GetChTime(),
-                'x': self.m_vehicle_pos.x,
-                'y': self.m_vehicle_pos.y,
-                'z': self.m_vehicle_pos.z,
-                'roll': np.degrees(roll),
-                'pitch': np.degrees(pitch),
-                'yaw': np.degrees(vehicle_heading)
-                
-            }
-            self.vehicle_states.append(vehicle_state)
-            
+            # =============== Simulation ================
             # Synchronize and advance simulation for one step
             if self.is_rigid:
                 # print("Rigid terrain", len(self.rigid_terrains))
@@ -683,7 +806,8 @@ class off_road_art(ChronoBaseEnv):
             self.m_system.DoStepDynamics(self.m_step_size)
             # Sensor update
             self.m_sens_manager.Update()
-            
+            # =============== Simulation ================
+
             # Check if vehicle is stuck
             current_position = (self.m_vehicle_pos.x, self.m_vehicle_pos.y, self.m_vehicle_pos.z)
             if self.last_position:
@@ -708,15 +832,41 @@ class off_road_art(ChronoBaseEnv):
             self._is_terminated()
             self._is_truncated()
             
+            # Store raw data
+            euler_angles = self.m_vehicle.GetVehicle().GetRot().GetCardanAnglesXYZ()
+            roll = euler_angles.x
+            pitch = euler_angles.y
+            vehicle_heading = euler_angles.z
+            self.roll_angles.append(np.degrees(abs(roll)))
+            self.pitch_angles.append(np.degrees(abs(pitch)))
+            self.throttle_data.append(self.m_driver_inputs.m_throttle)
+            self.steering_data.append(self.m_driver_inputs.m_steering)
+            # Store vehicle state
+            vehicle_state = {
+                'time': self.m_system.GetChTime(),
+                'x': self.m_vehicle_pos.x,
+                'y': self.m_vehicle_pos.y,
+                'z': self.m_vehicle_pos.z,
+                'roll': np.degrees(roll),
+                'pitch': np.degrees(pitch),
+                'yaw': np.degrees(vehicle_heading)
+                
+            }
+            self.vehicle_states.append(vehicle_state)
+
             info = {
                 'current_time': self.m_system.GetChTime(),
                 'time_to_goal': self.time_to_goal,
-                'success': self.m_success_count > 0,
+                # 如果 time_to_goal 有数字（不是 None），说明成功
+                'success': self.time_to_goal is not None,
                 'roll_angles': self.roll_angles.copy(),
                 'pitch_angles': self.pitch_angles.copy(),
                 'throttle_data': self.throttle_data.copy(),
                 'steering_data': self.steering_data.copy(),
-                'vehicle_states': self.vehicle_states.copy()
+                'vehicle_states': self.vehicle_states.copy(),
+                'local_goal': self.local_goal,
+                'pos': self.m_vehicle_pos,
+                'euler_angles': euler_angles,
             }
             
             self.roll_angles = []
@@ -880,7 +1030,7 @@ class off_road_art(ChronoBaseEnv):
 
     def get_reward(self):
         # Compute the progress made
-        progress_scale = 50 # coefficient for scaling progress reward
+        progress_scale = 1 # coefficient for scaling progress reward
         
         distance = self.m_vector_to_goal.Length()
         # print(f"Distance: {distance}")
@@ -892,7 +1042,7 @@ class off_road_art(ChronoBaseEnv):
         # 翻滚过大或俯仰过大时的角度惩罚。
         # If we have not moved even by 1 cm in 0.1 seconds give a penalty
         if np.abs(progress) < 0.01:
-            reward -= 10
+            reward -= 0.2
 
         # Roll and pitch angles
         euler_angles = self.m_vehicle.GetVehicle().GetRot().GetCardanAnglesXYZ()
@@ -900,18 +1050,18 @@ class off_road_art(ChronoBaseEnv):
         pitch = euler_angles.y
 
         # Define roll and pitch thresholds
-        roll_threshold = np.radians(30)  
-        pitch_threshold = np.radians(30)
+        roll_threshold = np.radians(10)  
+        pitch_threshold = np.radians(10)
 
         # Scale for roll and pitch penalties
-        roll_penalty_scale = 20 * np.abs(roll / roll_threshold) if np.abs(roll) > roll_threshold else 0
-        pitch_penalty_scale = 20 * np.abs(pitch / pitch_threshold) if np.abs(pitch) > pitch_threshold else 0
+        roll_penalty_scale = 0.1 * np.abs(roll / roll_threshold) if np.abs(roll) > roll_threshold else 0
+        pitch_penalty_scale = 0.1 * np.abs(pitch / pitch_threshold) if np.abs(pitch) > pitch_threshold else 0
 
         # Add penalties for excessive roll and pitch
         if abs(roll) > roll_threshold:
-            reward -= roll_penalty_scale * (abs(roll) - roll_threshold)
+            reward -= min(roll_penalty_scale * (abs(roll) - roll_threshold), 0.1)
         if abs(pitch) > pitch_threshold:
-            reward -= pitch_penalty_scale * (abs(pitch) - pitch_threshold)
+            reward -= min(pitch_penalty_scale * (abs(pitch) - pitch_threshold), 0.1)
 
         self.m_old_distance = distance
 
@@ -936,9 +1086,10 @@ class off_road_art(ChronoBaseEnv):
             print('Goal Reached')
             print('Initial position: ', self.m_initLoc)
             print('Goal position: ', self.m_goal)
-            print('--------------------------------------------------------------')
-            self.m_reward += 3000
+            self.m_reward += 15
             self.m_debug_reward += self.m_reward
+            print('Accumulated Reward: ', self.m_debug_reward)
+            print('--------------------------------------------------------------')
             self.m_terminated = True
             self.m_success_count += 1
             self.m_episode_num += 1
@@ -955,8 +1106,8 @@ class off_road_art(ChronoBaseEnv):
             print('Goal position: ', self.m_goal)
             print('Distance to goal: ', dist)
             # Give it a reward based on how close it reached the goal
-            self.m_reward -= 100  # Fixed penalty for timeout
-            self.m_reward -= 10 * dist
+            self.m_reward -= 5  # Fixed penalty for timeout
+            self.m_reward -= dist
 
             self.m_debug_reward += self.m_reward
             print('Reward: ', self.m_reward)
@@ -992,20 +1143,23 @@ class off_road_art(ChronoBaseEnv):
             print(f'Current position: {self.m_vehicle_pos}')
             print(f'Goal position: {self.m_goal}')
             print(f'Distance to goal: {m_vector_to_goal.Length():.2f} m')
+            # Penalize and terminate episode
+            self.m_reward -= 5
+            self.m_debug_reward += self.m_reward
+            print('Accumulated Reward: ', self.m_debug_reward)
             print('--------------------------------------------------------------')
 
-            # Penalize and terminate episode
-            self.m_reward -= 300
             self.m_truncated = True
             self.m_episode_num += 1
             self.m_stuck_count += 1
     
         if (self._fallen_off_terrain()):
-            self.m_reward -= 600
+            self.m_reward -= 5
             print('--------------------------------------------------------------')
             print('Fallen off terrain')
-            print('--------------------------------------------------------------')
             self.m_debug_reward += self.m_reward
+            print('Accumulated Reward: ', self.m_debug_reward)
+            print('--------------------------------------------------------------')
             self.m_truncated = True
             self.m_episode_num += 1
             self.m_fallen_count += 1
@@ -1181,6 +1335,56 @@ class off_road_art(ChronoBaseEnv):
         
         return goal
     
+    def set_local_goal(self, system, local_goal):
+        """
+        Display or move a local goal marker in the simulation.
+        :param system: Chrono system (self.m_system)
+        :param local_goal: local goal as an (x, y) tuple or chrono.ChVector3d
+        """
+        # 1. Convert local_goal to (x, y) coordinates
+        if isinstance(local_goal, chrono.ChVector3d):
+            x, y = local_goal.x, local_goal.y
+        else:
+            x, y = local_goal
+
+        # 2. Determine the z height based on terrain
+        if self.m_isFlat:
+            z = 0
+        else:
+            # Map (x, y) to high-resolution height map indices
+            bmp_x, bmp_y = self.transform_to_high_res([(x, y)])[0]
+            ix = int(np.clip(round(bmp_x), 0, self.high_res_dim_x - 1))
+            iy = int(np.clip(round(bmp_y), 0, self.high_res_dim_y - 1))
+            z = float(self.high_res_data[iy, ix])
+
+        # Lift the sphere slightly above the terrain to avoid clipping
+        offset = 1.0 * self.scale_factor
+        goal_pt = chrono.ChVector3d(x, y, z * self.scale_factor + offset)
+
+        # 3. Create a sphere on first call; otherwise, update its position
+        if not hasattr(self, 'm_local_goal_body'):
+            # Create a contact material for the sphere
+            mat = chrono.ChContactMaterialNSC()
+            # Create a sphere with radius 0.3 * scale
+            body = chrono.ChBodyEasySphere(
+                0.3 * self.scale_factor,  # radius
+                1000,                      # density
+                True,                      # enable collision
+                False,                     # disable default visualization
+                mat
+            )
+            body.SetPos(goal_pt)
+            # Apply a green visual material
+            vis = chrono.ChVisualMaterial()
+            vis.SetAmbientColor(chrono.ChColor(0, 1, 0))
+            vis.SetDiffuseColor(chrono.ChColor(0, 1, 0))
+            body.GetVisualShape(0).SetMaterial(0, vis)
+            system.Add(body)
+            self.m_local_goal_body = body
+        else:
+            # Update the sphere's position
+            self.m_local_goal_body.SetPos(goal_pt)
+
     def get_cropped_map(self, vehicle, vehicle_pos, region_size, num_front_regions):
         """Get terrain height maps around the vehicle"""
         bmp_dim_y, bmp_dim_x = self.high_res_data.shape  # height (rows), width (columns)

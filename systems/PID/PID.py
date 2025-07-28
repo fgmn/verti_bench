@@ -157,65 +157,69 @@ class PIDPlanner:
         
         # Plan path
         planner = AStarPlanner(inflated_map, start_grid, goal_grid)
-        path = planner.plan()
-        path = self.smooth_path_bezier(path)
+        raw_path = planner.plan()
+        path = self.smooth_path_bezier(raw_path)
         
         if path is None:
             print("No valid path found!")
             return None
         
-        # # Plotting the path
-        # plt.style.use('default')
-        # plt.rcParams['font.family'] = 'DejaVu Serif'
-        # plt.rcParams['font.size'] = 20
-        # plt.rcParams['axes.titlesize'] = 20
-        # plt.rcParams['axes.labelsize'] = 20
-        # plt.rcParams['xtick.labelsize'] = 14
-        # plt.rcParams['ytick.labelsize'] = 14
+        # Plotting the path
+        plt.style.use('default')
+        plt.rcParams['font.family'] = 'DejaVu Serif'
+        plt.rcParams['font.size'] = 20
+        plt.rcParams['axes.titlesize'] = 20
+        plt.rcParams['axes.labelsize'] = 20
+        plt.rcParams['xtick.labelsize'] = 14
+        plt.rcParams['ytick.labelsize'] = 14
         
-        # # Create figure
-        # fig, ax = plt.subplots(figsize=(8, 8), dpi=150)
+        # Create figure
+        fig, ax = plt.subplots(figsize=(8, 8), dpi=150)
         
-        # # Set background colors
-        # ax.set_facecolor('#F0F0F0')
-        # fig.patch.set_facecolor('white')
+        # Set background colors
+        ax.set_facecolor('#F0F0F0')
+        fig.patch.set_facecolor('white')
         
-        # # Remove tick marks while keeping labels
-        # ax.tick_params(axis='both', length=0)
+        # Remove tick marks while keeping labels
+        ax.tick_params(axis='both', length=0)
 
-        # # Plot the obstacle map
-        # plt.imshow(grid_map, cmap='binary', alpha=1.0, vmin=0, vmax=1, 
-        #            extent=[0, 129 * self.terrain_manager.scale_factor, 129 * self.terrain_manager.scale_factor, 0])
+        # Plot the obstacle map
+        plt.imshow(grid_map, cmap='binary', alpha=1.0, vmin=0, vmax=1, 
+                   extent=[0, 129 * self.terrain_manager.scale_factor, 129 * self.terrain_manager.scale_factor, 0])
         
-        # # Plot the smooth path with professional styling
-        # path_y = [p[0] * self.terrain_manager.scale_factor for p in path]
-        # path_x = [p[1] * self.terrain_manager.scale_factor for p in path]
-        # plt.plot(path_x, path_y, color='#D62728', linewidth=2, zorder=3)
+        # Plot the smooth path with professional styling
+        path_y = [p[0] * self.terrain_manager.scale_factor for p in path]
+        path_x = [p[1] * self.terrain_manager.scale_factor for p in path]
+        plt.plot(path_x, path_y, color='#D62728', linewidth=2, zorder=3)
+        # Plot the raw path with a different color
+        raw_path_y = [p[0] * self.terrain_manager.scale_factor for p in raw_path]
+        raw_path_x = [p[1] * self.terrain_manager.scale_factor for p in raw_path]
+        plt.plot(raw_path_x, raw_path_y, color="#74F10E", linewidth=2, zorder=3)
 
-        # # Plot start and goal with consistent styling
-        # plt.scatter(start_grid[1] * self.terrain_manager.scale_factor, start_grid[0] * self.terrain_manager.scale_factor, 
-        #             color='green', s=150, zorder=4, edgecolor='green', linewidth=1.5)
-        # plt.scatter(goal_grid[1] * self.terrain_manager.scale_factor, goal_grid[0] * self.terrain_manager.scale_factor, 
-        #             color='red', s=200, marker='*', zorder=4, edgecolor='darkred', linewidth=1.5)
+        # Plot start and goal with consistent styling
+        plt.scatter(start_grid[1] * self.terrain_manager.scale_factor, start_grid[0] * self.terrain_manager.scale_factor, 
+                    color='green', s=150, zorder=4, edgecolor='green', linewidth=1.5)
+        plt.scatter(goal_grid[1] * self.terrain_manager.scale_factor, goal_grid[0] * self.terrain_manager.scale_factor, 
+                    color='red', s=200, marker='*', zorder=4, edgecolor='darkred', linewidth=1.5)
 
-        # # Set axis limits
-        # plt.xlim(0, 129 * self.terrain_manager.scale_factor)
-        # plt.ylim(129 * self.terrain_manager.scale_factor, 0)
+        # Set axis limits
+        plt.xlim(0, 129 * self.terrain_manager.scale_factor)
+        plt.ylim(129 * self.terrain_manager.scale_factor, 0)
         
-        # # Customize axes labels
-        # ax.set_xlabel('X Position (m)', weight='bold', labelpad=10)
-        # ax.set_ylabel('Y Position (m)', weight='bold', labelpad=10)
+        # Customize axes labels
+        ax.set_xlabel('X Position (m)', weight='bold', labelpad=10)
+        ax.set_ylabel('Y Position (m)', weight='bold', labelpad=10)
         
-        # # Remove spines and add grid
-        # ax.spines['top'].set_visible(False)
-        # ax.spines['right'].set_visible(False)
-        # ax.spines['left'].set_color('white')
-        # ax.spines['bottom'].set_color('white')
+        # Remove spines and add grid
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['left'].set_color('white')
+        ax.spines['bottom'].set_color('white')
         
-        # # Set aspect ratio and layout
-        # plt.axis('equal')
-        # plt.tight_layout()
-        # plt.show()
+        # Set aspect ratio and layout
+        plt.axis('equal')
+        plt.tight_layout()
+        plt.show()
         
         # Convert to Chrono coordinates
         bitmap_points = [(point[1], point[0]) for point in path]

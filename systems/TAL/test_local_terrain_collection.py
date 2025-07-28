@@ -24,7 +24,7 @@ from systems.TAL.TAL_sim import TALSim
 def create_test_config():
     """Create test configuration with local terrain collection enabled"""
     config = {
-        'world_id': 9,  # Use world 1 for testing
+        'world_id': 75,  # Use world 75 for testing
         'scale_factor': 1.0,
         'render': False,  # Set to True if you want to see visualization
         'use_gui': False,
